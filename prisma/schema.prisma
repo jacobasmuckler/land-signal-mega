@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Listing {
+  id                    String   @id @default(cuid())
+  source                String
+  sourceListingId       String?
+  listingUrl            String?  @unique
+  title                 String
+  address               String?
+  city                  String?
+  state                 String?
+  county                String?
+  latitude              Float?
+  longitude             Float?
+  distanceFromCharlotte Float?
+  acreage               Float
+  price                 Float?
+  priceText             String?
+  pricePerAcre          Float?
+  propertyType          String?
+  zoning                String?
+  brokerName            String?
+  brokerPhone           String?
+  brokerEmail           String?
+  dateListed            DateTime?
+  dateFound             DateTime @default(now())
+  marketStage           String   @default("Listed")
+  locationVerified      Boolean  @default(false)
+  status                String   @default("New")
+  fitScore              Int      @default(1)
+  notes                 String?
+  alertSent             Boolean  @default(false)
+  rawEmailId            String?
+  rawSnippet            String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model Setting {
+  id              String @id @default(cuid())
+  key             String @unique
+  value           String
+  updatedAt       DateTime @updatedAt
+}
+
+model ScanLog {
+  id              String @id @default(cuid())
+  startedAt       DateTime @default(now())
+  finishedAt      DateTime?
+  emailsScanned   Int @default(0)
+  listingsCreated Int @default(0)
+  alertsSent      Int @default(0)
+  notes           String?
+}

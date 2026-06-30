@@ -1,0 +1,28 @@
+import { getSettings } from '@/lib/settings';
+
+export const dynamic = 'force-dynamic';
+
+export default async function SettingsPage() {
+  const s = await getSettings();
+  return (
+    <div className="max-w-3xl mx-auto px-6 py-8">
+      <h1 className="text-3xl font-bold mb-2">Settings</h1>
+      <p className="text-slate-600 mb-6">Edit your land search filter and Gmail query.</p>
+      <form action="/api/settings" method="post" className="card p-6 space-y-4">
+        <div><label className="label">Alert Email</label><input name="alertEmail" defaultValue={s.alertEmail} className="input" /></div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className="label">Minimum Acres</label><input name="minAcres" defaultValue={s.minAcres} className="input" /></div>
+          <div><label className="label">Radius Miles</label><input name="radiusMiles" defaultValue={s.radiusMiles} className="input" /></div>
+        </div>
+        <div><label className="label">Maximum Emails Per Scan</label><input name="gmailMaxResults" type="number" min="1" max="500" defaultValue={s.gmailMaxResults} className="input" /></div>
+        <p className="text-sm text-slate-600">Alerts require a geocoded address inside the radius. Leads with unknown locations remain on the dashboard for review.</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className="label">Center Latitude</label><input name="centerLat" defaultValue={s.centerLat} className="input" /></div>
+          <div><label className="label">Center Longitude</label><input name="centerLng" defaultValue={s.centerLng} className="input" /></div>
+        </div>
+        <div><label className="label">Gmail Search Query</label><textarea name="gmailSearchQuery" defaultValue={s.gmailSearchQuery} className="input min-h-32" /></div>
+        <button className="btn btn-primary">Save Settings</button>
+      </form>
+    </div>
+  );
+}
