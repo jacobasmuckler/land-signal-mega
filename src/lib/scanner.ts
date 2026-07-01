@@ -18,7 +18,7 @@ function isAllowedEmail(email: { from?: string; subject?: string; snippet?: stri
   return true;
 }
 
-export async function runScan(override?: { query?: string; maxResults?: number }) {
+export async function runScan(override?: { query?: string; maxResults?: number; sendAlerts?: boolean; notePrefix?: string }) {
   const settings = await getSettings();
   const log = await prisma.scanLog.create({ data: { notes: 'Started Gmail scan' } });
   let emailsScanned = 0, listingsCreated = 0, alertsSent = 0;
@@ -59,8 +59,10 @@ export async function runScan(override?: { query?: string; maxResults?: number }
         marketStage: parsed.marketStage, locationVerified, status: 'New'
       }});
       listingsCreated++;
-      const sent = await sendListingAlert(listing, settings.alertEmail);
-      if (sent) { alertsSent++; await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } }); }
+      if (override?.sendAlerts !== false) {
+        const sent = await sendListingAlert(listing, settings.alertEmail);
+        if (sent) { alertsSent++; await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } }); }
+      }
       return true;
     } catch (e: any) {
       // Unique-URL collision (same listing seen twice in a thread) — not an error, just skip.
@@ -85,7 +87,7 @@ export async function runScan(override?: { query?: string; maxResults?: number }
       const one = parseListingEmail({ from: email.from, subject: email.subject, body: email.body, snippet: email.snippet });
       if (one && ALLOWED_SOURCES.includes(one.source)) await saveOne(one, email.id);
     }
-    await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: 'Finished scan: accepted LandWatch/Land.com and Crexi only; Zillow and generic/report emails ignored.' } });
+    await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: `${override?.notePrefix || 'Finished scan'}: accepted LandWatch/Land.com and Crexi only; Zillow and generic/report emails ignored. ${emailsScanned} emails checked, ${listingsCreated} listings added.` } });
     return { emailsScanned, listingsCreated, alertsSent };
   } catch (err: any) {
     await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: err?.message || 'Scan failed' } });

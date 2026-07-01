@@ -112,6 +112,7 @@ export async function searchGmailMessages(query: string, maxResults = 20): Promi
   const list = await gmailGet(`messages?${search.toString()}`);
   const messages: GmailMessage[] = [];
   const seenMsgIds = new Set<string>();
+  const seenThreadIds = new Set<string>();
 
   for (const item of list.messages || []) {
     if (!item.id) continue;
@@ -119,6 +120,8 @@ export async function searchGmailMessages(query: string, maxResults = 20): Promi
     // LandWatch/Land.com reply on the SAME thread, so a single search hit can represent
     // many listings. Expand each hit into every message in its thread.
     const threadId = full.threadId || item.id;
+    if (seenThreadIds.has(threadId)) continue;
+    seenThreadIds.add(threadId);
     let threadMsgs: any[] = [full];
     try {
       const thread = await gmailGet(`threads/${encodeURIComponent(threadId)}?format=full`);

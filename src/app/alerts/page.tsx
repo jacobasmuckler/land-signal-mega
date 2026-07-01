@@ -39,6 +39,12 @@ export default async function AlertsDashboard() {
         <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Last Scan</div><div className="text-sm font-semibold">{logs[0]?.startedAt?.toLocaleString() || 'Never'}</div></div>
       </div>
 
+      {logs[0]?.notes && (
+        <div className="card p-4 mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
+          {logs[0].notes}
+        </div>
+      )}
+
       <AlertsMap listings={listings.map((l: any) => ({
         id: l.id, title: l.title, source: l.source, address: l.address, county: l.county,
         acreage: l.acreage, price: l.price, latitude: l.latitude, longitude: l.longitude,
