@@ -22,7 +22,13 @@ export async function runScan() {
     emailsScanned = emails.length;
     for (const email of emails) {
       const parsed = parseListingEmail({ from: email.from, subject: email.subject, body: email.body, snippet: email.snippet });
-      if (!parsed?.acreage || parsed.acreage < minAcres) continue;
+      if (!parsed) continue;
+      // Ignored sources: Zillow alert emails embed pixel dimensions (e.g. width="2522")
+      // that the parser misreads as acreage, producing junk rows. Skip them entirely and
+      // rely on LandWatch/Crexi/Land.com, which put clean acreage in the email itself.
+      const IGNORED_SOURCES = ['Zillow'];
+      if (IGNORED_SOURCES.includes(parsed.source)) continue;
+      if (!parsed.acreage || parsed.acreage < minAcres) continue;
 
       const already = await prisma.listing.findFirst({
         where: { OR: [
