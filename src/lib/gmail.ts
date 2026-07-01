@@ -99,7 +99,11 @@ async function gmailGet(path: string) {
   return data;
 }
 
-export async function searchGmailMessages(query: string, maxResults = 20): Promise<GmailMessage[]> {
+export async function searchGmailMessages(
+  query: string,
+  maxResults = 20,
+  options: { expandThreads?: boolean } = {}
+): Promise<GmailMessage[]> {
   if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_REFRESH_TOKEN) {
     console.warn('Gmail environment variables are missing. Returning an empty scan result.');
     return [];
@@ -113,20 +117,25 @@ export async function searchGmailMessages(query: string, maxResults = 20): Promi
   const messages: GmailMessage[] = [];
   const seenMsgIds = new Set<string>();
   const seenThreadIds = new Set<string>();
+  const expandThreads = options.expandThreads === true;
 
   for (const item of list.messages || []) {
     if (!item.id) continue;
     const full = await gmailGet(`messages/${encodeURIComponent(item.id)}?format=full`);
-    // LandWatch/Land.com reply on the SAME thread, so a single search hit can represent
-    // many listings. Expand each hit into every message in its thread.
-    const threadId = full.threadId || item.id;
-    if (seenThreadIds.has(threadId)) continue;
-    seenThreadIds.add(threadId);
     let threadMsgs: any[] = [full];
-    try {
-      const thread = await gmailGet(`threads/${encodeURIComponent(threadId)}?format=full`);
-      if (Array.isArray(thread.messages) && thread.messages.length) threadMsgs = thread.messages;
-    } catch { /* fall back to the single message */ }
+
+    if (expandThreads) {
+      // LandWatch/Land.com often keep many alerts on the SAME thread, so backfill needs
+      // to expand each hit into every message in its thread. Normal scans should not do
+      // this because it burns Gmail API quota very quickly.
+      const threadId = full.threadId || item.id;
+      if (seenThreadIds.has(threadId)) continue;
+      seenThreadIds.add(threadId);
+      try {
+        const thread = await gmailGet(`threads/${encodeURIComponent(threadId)}?format=full`);
+        if (Array.isArray(thread.messages) && thread.messages.length) threadMsgs = thread.messages;
+      } catch { /* fall back to the single message */ }
+    }
 
     for (const msg of threadMsgs) {
       const mid = msg.id || item.id;

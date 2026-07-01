@@ -8,7 +8,7 @@ import { calculateFitScore } from './fitScore';
 import { sendListingAlert } from './alerts';
 
 const ALLOWED_SOURCES = ['LandWatch', 'Crexi'];
-const SAFE_GMAIL_QUERY = 'newer_than:30d (from:crexi OR from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com) -subject:"weekly report" -subject:"daily report" -subject:recap';
+const SAFE_GMAIL_QUERY = 'newer_than:7d (from:crexi OR from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com) -subject:"weekly report" -subject:"daily report" -subject:recap';
 
 function isAllowedEmail(email: { from?: string; subject?: string; snippet?: string }) {
   const source = guessSource(`${email.from || ''} ${email.subject || ''}`);
@@ -18,7 +18,7 @@ function isAllowedEmail(email: { from?: string; subject?: string; snippet?: stri
   return true;
 }
 
-export async function runScan(override?: { query?: string; maxResults?: number; sendAlerts?: boolean; notePrefix?: string }) {
+export async function runScan(override?: { query?: string; maxResults?: number; sendAlerts?: boolean; notePrefix?: string; expandThreads?: boolean }) {
   const settings = await getSettings();
   const log = await prisma.scanLog.create({ data: { notes: 'Started Gmail scan' } });
   let emailsScanned = 0, listingsCreated = 0, alertsSent = 0;
@@ -26,7 +26,7 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
   const radiusMiles = Number(settings.radiusMiles || 100);
   const centerLat = Number(settings.centerLat || 35.2271);
   const centerLng = Number(settings.centerLng || -80.8431);
-  const gmailMaxResults = Math.min(500, Math.max(1, Number(override?.maxResults ?? settings.gmailMaxResults ?? 100)));
+  const gmailMaxResults = Math.min(500, Math.max(1, Number(override?.maxResults ?? settings.gmailMaxResults ?? 50)));
   const gmailQuery = override?.query || SAFE_GMAIL_QUERY;
 
   async function saveOne(parsed: ParsedListing, emailId: string): Promise<boolean> {
@@ -72,7 +72,9 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
   }
 
   try {
-    const emails = await searchGmailMessages(gmailQuery, gmailMaxResults);
+    const emails = await searchGmailMessages(gmailQuery, gmailMaxResults, {
+      expandThreads: override?.expandThreads === true,
+    });
     emailsScanned = emails.length;
     for (const email of emails) {
       if (!isAllowedEmail(email)) continue;
