@@ -3,11 +3,11 @@ import { relativeRedirect } from '@/lib/redirect';
 
 export const dynamic = 'force-dynamic';
 
-// Manual backfill: sweep ALL past LandWatch / Land.com / Lands of America emails.
-// Wide date range, only those senders, up to the 500-email cap.
+// Manual backfill: sweep ALL past LandWatch / Land.com / Lands of America email
+// (no date limit — grabs the entire history from those senders, up to the 500 cap).
 export async function POST() {
   await runScan({
-    query: 'newer_than:2y (from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm)',
+    query: '(from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com)',
     maxResults: 500,
   });
   return relativeRedirect('/alerts');

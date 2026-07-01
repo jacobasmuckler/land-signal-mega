@@ -87,17 +87,22 @@ export function guessSource(fromOrSubject: string): string {
 // Addresses often lack a leading street number (e.g. "Sumter Hwy., Kingstree, SC")
 // and are followed by a county ("..., NC, Polk County"). Capture to the state, drop trailing county.
 export function guessAddress(text: string): string | undefined {
-  // Drop a leading "$price • N acres " prefix so it doesn't bleed into the address.
+  // Drop a leading "$price • N acres " prefix and the "N Property/Properties" count
+  // that LandWatch subject lines carry, so neither bleeds into the address.
   const cleaned = cleanText(text)
+    .replace(/\b\d+\s+propert(?:y|ies)\b/gi, ' ')
     .replace(/\$[\d,.]+\s*[kKmM]?\s*[\u2022•\-–]?\s*/g, ' ')
     .replace(/[0-9,.]+\s*(?:\+\/-|±)?\s*(?:acres|acre|ac)\b[\s\u2022•\-–]*/gi, ' ')
+    .replace(/[.]{2,}/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   const withNumber = /(\d{1,6}\s+[A-Za-z0-9 .#'-]{2,70},?\s+[A-Za-z .'-]{2,40},\s*(?:NC|SC|North Carolina|South Carolina)(?:\s+\d{5}(?:-\d{4})?)?)/i;
-  const withoutNumber = /([A-Za-z0-9 .#'-]{3,70},\s+[A-Za-z .'-]{2,40},\s*(?:NC|SC|North Carolina|South Carolina)(?:\s+\d{5}(?:-\d{4})?)?)/i;
+  const withoutNumber = /\b([A-Za-z][A-Za-z0-9 .#'-]{2,70},\s+[A-Za-z .'-]{2,40},\s*(?:NC|SC|North Carolina|South Carolina)(?:\s+\d{5}(?:-\d{4})?)?)/i;
   const m = cleaned.match(withNumber) || cleaned.match(withoutNumber);
   if (!m) return undefined;
-  return m[1].replace(/,\s*[A-Za-z .'-]+\s+County\b.*$/i, '').trim();
+  // Trim any leading non-address filler up to the first street number or capitalized road word.
+  let addr = m[1].replace(/,\s*[A-Za-z .'-]+\s+County\b.*$/i, '').trim();
+  return addr;
 }
 
 

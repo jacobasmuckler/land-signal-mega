@@ -25,9 +25,6 @@ export default async function AlertsDashboard() {
           <form action="/api/backfill" method="post">
             <button className="btn" title="Pull all past LandWatch / Land.com emails">Backfill LandWatch/Land.com</button>
           </form>
-          <form action="/api/listings/delete-zillow" method="post">
-            <button className="btn danger">Delete all Zillow</button>
-          </form>
           <form action="/api/scan" method="post">
             <button className="btn btn-primary">Scan Now</button>
           </form>
