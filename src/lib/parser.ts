@@ -20,7 +20,12 @@ export type ParsedListing = {
 };
 
 function cleanText(input: string) {
+  const attrs = Array.from(
+    input.matchAll(/\s(?:alt|title|aria-label)\s*=\s*["']([^"']+)["']/gi),
+    match => match[1]
+  ).join(' ');
   return input
+    .replace(/^/, `${attrs} `)
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
@@ -133,16 +138,39 @@ export function detectMarketStage(text: string): 'Listed' | 'Pre-Market' {
 // ── multi-listing digest parsing (LandWatch/Land.com "Saved Searches", Crexi) ──
 function extractBlocks(body: string): { url?: string; text: string }[] {
   const blocks: { url?: string; text: string }[] = [];
+  const links: string[] = [];
   const anchorRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let m: RegExpExecArray | null;
   while ((m = anchorRe.exec(body))) {
     const href = m[1];
     if (!/land\.com|landwatch|landsofamerica|crexi\.com\/properties/i.test(href)) continue;
+    links.push(href.replace(/[?#].*$/, ''));
     const inner = m[2];
     const alt = inner.match(/alt=["']([^"']+)["']/i)?.[1] || '';
-    blocks.push({ url: href.replace(/[?#].*$/, ''), text: cleanText(inner + ' ' + alt) });
+    const text = cleanText(inner + ' ' + alt);
+    if (parseAcreage(text)) blocks.push({ url: href.replace(/[?#].*$/, ''), text });
   }
-  return blocks;
+
+  const fullText = cleanText(body)
+    .replace(/\bView Details\b/gi, ' View Details ')
+    .replace(/\bUpdate your saved searches\b[\s\S]*$/i, ' ');
+  const starts = Array.from(fullText.matchAll(/(?:\b\d+\s+propert(?:y|ies)\s+)?\$[\d,.]+(?:\s*[kKmM])?\s*(?:[\u2022â€¢·\-–]\s*)?[0-9,.]+\s*(?:acres?|acre|ac\b)/gi));
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i].index ?? 0;
+    const end = starts[i + 1]?.index ?? Math.min(fullText.length, start + 700);
+    const segment = fullText.slice(start, end).trim();
+    if (parseAcreage(segment)) {
+      blocks.push({ url: links[i], text: segment });
+    }
+  }
+
+  const seen = new Set<string>();
+  return blocks.filter(block => {
+    const key = `${block.url || ''}|${block.text.slice(0, 140)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function crexiId(url?: string): string | undefined {

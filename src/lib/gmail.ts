@@ -22,17 +22,14 @@ function decodeBase64(data?: string) {
 
 function extractBody(payload: any): string {
   if (!payload) return '';
-  if (payload.body?.data) return decodeBase64(payload.body.data);
+  const bodies: string[] = [];
+  if (payload.body?.data) bodies.push(decodeBase64(payload.body.data));
   const parts = payload.parts || [];
-  const plain = parts.find((part: any) => part.mimeType === 'text/plain');
-  if (plain?.body?.data) return decodeBase64(plain.body.data);
-  const html = parts.find((part: any) => part.mimeType === 'text/html');
-  if (html?.body?.data) return decodeBase64(html.body.data);
   for (const part of parts) {
     const nested = extractBody(part);
-    if (nested) return nested;
+    if (nested) bodies.push(nested);
   }
-  return '';
+  return bodies.join('\n\n');
 }
 
 async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {

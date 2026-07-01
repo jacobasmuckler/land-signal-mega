@@ -31,6 +31,7 @@ export async function runScan(override?: { query?: string; maxResults?: number }
 
   async function saveOne(parsed: ParsedListing, emailId: string): Promise<boolean> {
     if (!parsed.acreage || parsed.acreage < minAcres) return false;
+    if (!parsed.address) return false;
     // Dedup by listing URL if present; otherwise by address+acreage. Never skip solely
     // because the URL is blank (threaded LandWatch messages often omit clean URLs).
     const orConds = [
@@ -43,12 +44,10 @@ export async function runScan(override?: { query?: string; maxResults?: number }
     }
 
     let lat: number | undefined, lng: number | undefined, distance: number | undefined;
-    if (parsed.address) {
-      const geo = await geocodeAddress(parsed.address);
-      if (geo) { lat = geo.lat; lng = geo.lng; distance = haversineMiles(centerLat, centerLng, lat, lng); }
-    }
-    if (distance != null && distance > radiusMiles) return false;
-    const locationVerified = distance != null;
+    const geo = await geocodeAddress(parsed.address);
+    if (geo) { lat = geo.lat; lng = geo.lng; distance = haversineMiles(centerLat, centerLng, lat, lng); }
+    if (distance == null || distance > radiusMiles) return false;
+    const locationVerified = true;
     const pricePerAcre = parsed.price ? parsed.price / parsed.acreage : undefined;
     const fitScore = calculateFitScore({ acreage: parsed.acreage, distance, pricePerAcre, brokerEmail: parsed.brokerEmail, brokerPhone: parsed.brokerPhone });
 
@@ -57,13 +56,11 @@ export async function runScan(override?: { query?: string; maxResults?: number }
         source: parsed.source, title: parsed.title, listingUrl: parsed.listingUrl || undefined, address: parsed.address, county: parsed.county, acreage: parsed.acreage,
         price: parsed.price, priceText: parsed.priceText, pricePerAcre, latitude: lat, longitude: lng, distanceFromCharlotte: distance,
         brokerEmail: parsed.brokerEmail, brokerPhone: parsed.brokerPhone, rawEmailId: emailId, rawSnippet: parsed.rawSnippet, fitScore,
-        marketStage: parsed.marketStage, locationVerified, status: locationVerified ? 'New' : 'Needs location'
+        marketStage: parsed.marketStage, locationVerified, status: 'New'
       }});
       listingsCreated++;
-      if (parsed.acreage >= minAcres && distance != null && distance <= radiusMiles) {
-        const sent = await sendListingAlert(listing, settings.alertEmail);
-        if (sent) { alertsSent++; await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } }); }
-      }
+      const sent = await sendListingAlert(listing, settings.alertEmail);
+      if (sent) { alertsSent++; await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } }); }
       return true;
     } catch (e: any) {
       // Unique-URL collision (same listing seen twice in a thread) — not an error, just skip.
