@@ -182,7 +182,11 @@ export function parseListingEmailListings(args: { from?: string; subject?: strin
   const source = guessSource(`${args.from || ''} ${args.subject || ''}`);
   if (!['LandWatch', 'Crexi'].includes(source)) return [];
   const out: ParsedListing[] = [];
-  for (const block of extractBlocks(args.body)) {
+  // Gmail's list/snippet line often contains the best LandWatch data, while the
+  // HTML body can be image-heavy or oddly nested. Parse subject + snippet + body
+  // together so saved-search digests do not disappear just because the body is weak.
+  const searchableText = `${args.subject || ''}\n${args.snippet || ''}\n${args.body || ''}`;
+  for (const block of extractBlocks(searchableText)) {
     const acreage = parseAcreage(block.text);
     if (!acreage) continue;
     const price = parsePrice(block.text);

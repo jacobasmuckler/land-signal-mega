@@ -28,10 +28,24 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
   const centerLng = Number(settings.centerLng || -80.8431);
   const gmailMaxResults = Math.min(500, Math.max(1, Number(override?.maxResults ?? settings.gmailMaxResults ?? 50)));
   const gmailQuery = override?.query || SAFE_GMAIL_QUERY;
+  const skipped = {
+    unsupportedSource: 0,
+    noParsedListing: 0,
+    noAcreage: 0,
+    belowMinAcres: 0,
+    missingAddress: 0,
+    duplicate: 0,
+    geocodeFailed: 0,
+    outsideRadius: 0,
+  };
+  let parsedCandidates = 0;
+  type SaveResult = 'created' | 'noAcreage' | 'belowMinAcres' | 'missingAddress' | 'duplicate' | 'geocodeFailed' | 'outsideRadius';
 
-  async function saveOne(parsed: ParsedListing, emailId: string): Promise<boolean> {
-    if (!parsed.acreage || parsed.acreage < minAcres) return false;
-    if (!parsed.address) return false;
+  async function saveOne(parsed: ParsedListing, emailId: string): Promise<SaveResult> {
+    parsedCandidates++;
+    if (!parsed.acreage) return 'noAcreage';
+    if (parsed.acreage < minAcres) return 'belowMinAcres';
+    if (!parsed.address) return 'missingAddress';
     // Dedup by listing URL if present; otherwise by address+acreage. Never skip solely
     // because the URL is blank (threaded LandWatch messages often omit clean URLs).
     const orConds = [
@@ -40,13 +54,14 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
     ].filter(Boolean) as any[];
     if (orConds.length) {
       const already = await prisma.listing.findFirst({ where: { OR: orConds } });
-      if (already) return false;
+      if (already) return 'duplicate';
     }
 
     let lat: number | undefined, lng: number | undefined, distance: number | undefined;
     const geo = await geocodeAddress(parsed.address);
     if (geo) { lat = geo.lat; lng = geo.lng; distance = haversineMiles(centerLat, centerLng, lat, lng); }
-    if (distance == null || distance > radiusMiles) return false;
+    if (distance == null) return 'geocodeFailed';
+    if (distance > radiusMiles) return 'outsideRadius';
     const locationVerified = true;
     const pricePerAcre = parsed.price ? parsed.price / parsed.acreage : undefined;
     const fitScore = calculateFitScore({ acreage: parsed.acreage, distance, pricePerAcre, brokerEmail: parsed.brokerEmail, brokerPhone: parsed.brokerPhone });
@@ -63,12 +78,16 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
         const sent = await sendListingAlert(listing, settings.alertEmail);
         if (sent) { alertsSent++; await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } }); }
       }
-      return true;
+      return 'created';
     } catch (e: any) {
       // Unique-URL collision (same listing seen twice in a thread) — not an error, just skip.
-      if (e?.code === 'P2002') return false;
+      if (e?.code === 'P2002') return 'duplicate';
       throw e;
     }
+  }
+
+  function countSaveResult(result: SaveResult) {
+    if (result !== 'created') skipped[result]++;
   }
 
   try {
@@ -77,19 +96,24 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
     });
     emailsScanned = emails.length;
     for (const email of emails) {
-      if (!isAllowedEmail(email)) continue;
+      if (!isAllowedEmail(email)) {
+        skipped.unsupportedSource++;
+        continue;
+      }
 
       // 1) Try the multi-listing digest parser (LandWatch/Land.com "Saved Searches", Crexi).
       const many = parseListingEmailListings({ from: email.from, subject: email.subject, body: email.body, snippet: email.snippet });
       if (many.length) {
-        for (const p of many) await saveOne(p, email.id);
+        for (const p of many) countSaveResult(await saveOne(p, email.id));
         continue;
       }
       // 2) Fall back to single-listing parse for everything else.
       const one = parseListingEmail({ from: email.from, subject: email.subject, body: email.body, snippet: email.snippet });
-      if (one && ALLOWED_SOURCES.includes(one.source)) await saveOne(one, email.id);
+      if (one && ALLOWED_SOURCES.includes(one.source)) countSaveResult(await saveOne(one, email.id));
+      else skipped.noParsedListing++;
     }
-    await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: `${override?.notePrefix || 'Finished scan'}: accepted LandWatch/Land.com and Crexi only; Zillow and generic/report emails ignored. ${emailsScanned} emails checked, ${listingsCreated} listings added.` } });
+    const skipSummary = `parsed ${parsedCandidates} candidates; skipped unsupported/report ${skipped.unsupportedSource}, no parsed listing ${skipped.noParsedListing}, no acreage ${skipped.noAcreage}, below ${minAcres} acres ${skipped.belowMinAcres}, missing address ${skipped.missingAddress}, duplicate ${skipped.duplicate}, geocode failed ${skipped.geocodeFailed}, outside ${radiusMiles} miles ${skipped.outsideRadius}`;
+    await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: `${override?.notePrefix || 'Finished scan'}: accepted LandWatch/Land.com and Crexi only; Zillow and generic/report emails ignored. ${emailsScanned} emails checked, ${listingsCreated} listings added; ${skipSummary}.` } });
     return { emailsScanned, listingsCreated, alertsSent };
   } catch (err: any) {
     await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: err?.message || 'Scan failed' } });
