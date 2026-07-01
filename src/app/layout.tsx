@@ -4,8 +4,8 @@ import Link from 'next/link';
 export const metadata = { title: 'Land Signal — Northbridge' };
 
 const LINKS = [
-  { href: '/', label: 'For-Sale Alerts' },
-  { href: '/finder', label: 'Parcel Finder' },
+  { href: '/', label: 'Parcel Finder' },
+  { href: '/alerts', label: 'For-Sale Alerts' },
   { href: '/add', label: 'Add Listing' },
   { href: '/settings', label: 'Settings' },
 ];

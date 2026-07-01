@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server';
 export async function POST() {
   try {
     await runScan();
-    return relativeRedirect('/');
+    return relativeRedirect('/alerts');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The scan failed';
     console.error('Manual scan failed:', error);
