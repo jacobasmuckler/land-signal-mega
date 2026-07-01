@@ -41,3 +41,8 @@ a{ color:var(--cyan); }
 
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+
+.del-row{ background:none; border:none; color:var(--muted); font-size:18px; line-height:1; cursor:pointer; padding:0 6px; }
+.del-row:hover{ color:var(--danger); }
+.btn.danger{ border-color:var(--danger); color:var(--danger); background:none; }
+.btn.danger:hover{ background:var(--danger); color:var(--ink); }

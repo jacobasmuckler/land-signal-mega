@@ -12,7 +12,7 @@ import { sendListingAlert } from './alerts';
 // LandWatch/Land.com/Crexi, which carry clean acreage in the email itself.
 const IGNORED_SOURCES = ['Zillow'];
 
-export async function runScan() {
+export async function runScan(override?: { query?: string; maxResults?: number }) {
   const settings = await getSettings();
   const log = await prisma.scanLog.create({ data: { notes: 'Started Gmail scan' } });
   let emailsScanned = 0, listingsCreated = 0, alertsSent = 0;
@@ -20,7 +20,8 @@ export async function runScan() {
   const radiusMiles = Number(settings.radiusMiles || 100);
   const centerLat = Number(settings.centerLat || 35.2271);
   const centerLng = Number(settings.centerLng || -80.8431);
-  const gmailMaxResults = Math.min(500, Math.max(1, Number(settings.gmailMaxResults || 100)));
+  const gmailMaxResults = Math.min(500, Math.max(1, Number(override?.maxResults ?? settings.gmailMaxResults ?? 100)));
+  const gmailQuery = override?.query || settings.gmailSearchQuery;
 
   async function saveOne(parsed: ParsedListing, emailId: string): Promise<boolean> {
     if (!parsed.acreage || parsed.acreage < minAcres) return false;
@@ -57,7 +58,7 @@ export async function runScan() {
   }
 
   try {
-    const emails = await searchGmailMessages(settings.gmailSearchQuery, gmailMaxResults);
+    const emails = await searchGmailMessages(gmailQuery, gmailMaxResults);
     emailsScanned = emails.length;
     for (const email of emails) {
       const source = guessSource(`${email.from || ''} ${email.subject || ''}`);

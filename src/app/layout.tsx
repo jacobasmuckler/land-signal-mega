@@ -1,11 +1,12 @@
 import './globals.css';
 import Link from 'next/link';
 
-export const metadata = { title: 'Land Signal — Northbridge' };
+export const metadata = { title: 'Land Signal' };
 
 const LINKS = [
   { href: '/', label: 'Parcel Finder' },
   { href: '/alerts', label: 'For-Sale Alerts' },
+  { href: '/saved', label: 'Saved' },
   { href: '/add', label: 'Add Listing' },
   { href: '/settings', label: 'Settings' },
 ];
@@ -26,7 +27,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/" className="flex items-center gap-2">
               <span style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--lime)', boxShadow: '0 0 13px var(--lime)' }} />
               <span className="display" style={{ fontWeight: 700, fontSize: 17, letterSpacing: '.04em' }}>LAND SIGNAL</span>
-              <span className="mono" style={{ fontSize: 9.5, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--muted)', marginLeft: 6 }}>Northbridge</span>
             </Link>
             <div className="flex gap-1 text-sm">
               {LINKS.map(l => (

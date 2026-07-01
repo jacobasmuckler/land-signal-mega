@@ -2,21 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-// 19 Northbridge target counties
-const COUNTIES: Record<string, string[]> = {
-  NC: ['Mecklenburg','Gaston','Lincoln','Cleveland','Catawba','Iredell','Rowan','Cabarrus','Stanly','Union','Forsyth','Guilford','Durham','Wake'],
-  SC: ['York','Lancaster','Chester','Spartanburg','Greenville'],
-};
-const SEATS: Record<string, [number, number]> = {
-  Mecklenburg:[35.2271,-80.8431],Gaston:[35.2621,-81.1873],Lincoln:[35.4735,-81.2545],
-  Cleveland:[35.2860,-81.5400],Catawba:[35.7140,-81.2150],Iredell:[35.7826,-80.8873],
-  Rowan:[35.6709,-80.4742],Cabarrus:[35.4088,-80.5795],Stanly:[35.3640,-80.1490],
-  Union:[34.9870,-80.5320],Forsyth:[36.0999,-80.2442],Guilford:[36.0726,-79.7920],
-  Durham:[35.9940,-78.8986],Wake:[35.7796,-78.6382],
-  York:[34.9249,-81.0251],Lancaster:[34.7204,-80.7712],Chester:[34.7060,-81.2120],
-  Spartanburg:[34.9496,-81.9320],Greenville:[34.8526,-82.3940],
-};
-
+// 19 target counties
 const LAYERS = [
   { id:'roads', name:'Public roads', note:'OpenStreetMap', color:'#9FB4AF', type:'tile',
     url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opacity:.55 },
@@ -49,7 +35,6 @@ export default function FinderPage() {
   const [statusMsg, setStatusMsg] = useState('Search a city or jump to a county to begin.');
   const [busy, setBusy] = useState(false);
   const [activeLayers, setActiveLayers] = useState<string[]>([]);
-  const [stateFilter, setStateFilter] = useState<'all'|'NC'|'SC'>('all');
 
   // load Leaflet + sources, init map
   useEffect(() => {
@@ -192,16 +177,8 @@ export default function FinderPage() {
     group.on('add',()=>{refresh();map.on('moveend',refresh);}); group.on('remove',()=>map.off('moveend',refresh));
     return group;
   }
-  function jumpCounty(c:string){
-    const s=SEATS[c]; if(!s)return;
-    setCity(c+(COUNTIES.SC.includes(c)?', SC':', NC'));
-    if(mapRef.current) mapRef.current.setView(s,11);
-  }
   function focusParcel(p:any){ if(mapRef.current){ mapRef.current.setView(p.center,14); } }
 
-  const countyList = stateFilter==='all'
-    ? [...COUNTIES.NC.map(c=>[c,'NC']),...COUNTIES.SC.map(c=>[c,'SC'])]
-    : COUNTIES[stateFilter].map(c=>[c,stateFilter]);
 
   return (
     <div style={{ display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 53px)' }}>
@@ -219,26 +196,6 @@ export default function FinderPage() {
         <button className="btn btn-primary" style={{ width:'100%', marginTop:12 }} onClick={runSearch} disabled={!ready||busy}>
           {busy ? 'Searching…' : 'Find parcels'}
         </button>
-
-        <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)', margin:'20px 0 9px' }}>Target counties</div>
-        <div style={{ display:'flex', gap:6, marginBottom:10 }}>
-          {(['all','NC','SC'] as const).map(st=>(
-            <button key={st} onClick={()=>setStateFilter(st)} className="mono"
-              style={{ flex:1, fontSize:10, padding:6, borderRadius:6, cursor:'pointer',
-                border:'1px solid var(--line2)', background: stateFilter===st?'var(--surface2)':'transparent',
-                color: stateFilter===st?'var(--text)':'var(--muted)' }}>
-              {st==='all'?'All':st}
-            </button>
-          ))}
-        </div>
-        <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
-          {countyList.map(([c,s])=>(
-            <button key={c} onClick={()=>jumpCounty(c)} className="mono"
-              style={{ fontSize:10.5, padding:'5px 9px', borderRadius:14, cursor:'pointer', border:'1px solid var(--line2)', background:'transparent', color:'var(--muted)' }}>
-              {c} <span style={{ opacity:.5 }}>{s}</span>
-            </button>
-          ))}
-        </div>
 
         <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)', margin:'20px 0 9px' }}>Feasibility layers</div>
         {LAYERS.map(l=>{
