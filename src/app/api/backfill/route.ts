@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 // (no date limit — grabs the entire history from those senders, up to the 500 cap).
 export async function POST() {
   await runScan({
-    query: '(from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com)',
+    query: '(from:crexi OR from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com) -subject:"weekly report" -subject:"daily report" -subject:recap',
     maxResults: 500,
   });
   return relativeRedirect('/alerts');

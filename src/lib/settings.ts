@@ -8,7 +8,7 @@ const defaults: Record<string, string> = {
   minAcres: '20',
   gmailMaxResults: '100',
   alertEmail: process.env.ALERT_TO_EMAIL || '',
-  gmailSearchQuery: 'newer_than:7d (from:crexi OR from:zillow OR from:landwatch OR from:redfin OR from:realtor OR from:loopnet OR subject:land OR subject:acre OR subject:acres OR subject:listing OR subject:auction OR subject:foreclosure OR subject:"coming soon" OR subject:rezoning)',
+  gmailSearchQuery: 'newer_than:30d (from:crexi OR from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com) -subject:"weekly report" -subject:"daily report" -subject:recap',
 };
 
 export async function getSetting(key: string) {

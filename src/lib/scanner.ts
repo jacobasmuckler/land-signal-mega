@@ -7,10 +7,16 @@ import { haversineMiles } from './distance';
 import { calculateFitScore } from './fitScore';
 import { sendListingAlert } from './alerts';
 
-// Zillow alert emails embed pixel dimensions (e.g. width="2522") that the parser
-// misreads as acreage, producing junk rows. Ignore Zillow entirely and rely on
-// LandWatch/Land.com/Crexi, which carry clean acreage in the email itself.
-const IGNORED_SOURCES = ['Zillow'];
+const ALLOWED_SOURCES = ['LandWatch', 'Crexi'];
+const SAFE_GMAIL_QUERY = 'newer_than:30d (from:crexi OR from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com) -subject:"weekly report" -subject:"daily report" -subject:recap';
+
+function isAllowedEmail(email: { from?: string; subject?: string; snippet?: string }) {
+  const source = guessSource(`${email.from || ''} ${email.subject || ''}`);
+  if (!ALLOWED_SOURCES.includes(source)) return false;
+  const subject = `${email.subject || ''} ${email.snippet || ''}`.toLowerCase();
+  if (/weekly report|daily report|recap|digest complete|land signal|charlotte land weekly/i.test(subject)) return false;
+  return true;
+}
 
 export async function runScan(override?: { query?: string; maxResults?: number }) {
   const settings = await getSettings();
@@ -21,7 +27,7 @@ export async function runScan(override?: { query?: string; maxResults?: number }
   const centerLat = Number(settings.centerLat || 35.2271);
   const centerLng = Number(settings.centerLng || -80.8431);
   const gmailMaxResults = Math.min(500, Math.max(1, Number(override?.maxResults ?? settings.gmailMaxResults ?? 100)));
-  const gmailQuery = override?.query || settings.gmailSearchQuery;
+  const gmailQuery = override?.query || SAFE_GMAIL_QUERY;
 
   async function saveOne(parsed: ParsedListing, emailId: string): Promise<boolean> {
     if (!parsed.acreage || parsed.acreage < minAcres) return false;
@@ -70,8 +76,7 @@ export async function runScan(override?: { query?: string; maxResults?: number }
     const emails = await searchGmailMessages(gmailQuery, gmailMaxResults);
     emailsScanned = emails.length;
     for (const email of emails) {
-      const source = guessSource(`${email.from || ''} ${email.subject || ''}`);
-      if (IGNORED_SOURCES.includes(source)) continue;
+      if (!isAllowedEmail(email)) continue;
 
       // 1) Try the multi-listing digest parser (LandWatch/Land.com "Saved Searches", Crexi).
       const many = parseListingEmailListings({ from: email.from, subject: email.subject, body: email.body, snippet: email.snippet });
@@ -81,9 +86,9 @@ export async function runScan(override?: { query?: string; maxResults?: number }
       }
       // 2) Fall back to single-listing parse for everything else.
       const one = parseListingEmail({ from: email.from, subject: email.subject, body: email.body, snippet: email.snippet });
-      if (one && !IGNORED_SOURCES.includes(one.source)) await saveOne(one, email.id);
+      if (one && ALLOWED_SOURCES.includes(one.source)) await saveOne(one, email.id);
     }
-    await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: 'Finished scan' } });
+    await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: 'Finished scan: accepted LandWatch/Land.com and Crexi only; Zillow and generic/report emails ignored.' } });
     return { emailsScanned, listingsCreated, alertsSent };
   } catch (err: any) {
     await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: err?.message || 'Scan failed' } });
