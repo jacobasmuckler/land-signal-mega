@@ -1,6 +1,9 @@
 import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 
+// Never evaluate at build time — only when actually visited.
+export const dynamic = 'force-dynamic';
+
 // One-time cleanup: remove Zillow rows (bad acreage from pixel-width parsing).
 // Visit /api/cleanup once after deploy. Safe to run multiple times.
 export async function GET() {
