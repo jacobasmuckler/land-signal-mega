@@ -114,21 +114,36 @@ export async function searchGmailMessages(query: string, maxResults = 20): Promi
   });
   const list = await gmailGet(`messages?${search.toString()}`);
   const messages: GmailMessage[] = [];
+  const seenMsgIds = new Set<string>();
 
   for (const item of list.messages || []) {
     if (!item.id) continue;
     const full = await gmailGet(`messages/${encodeURIComponent(item.id)}?format=full`);
-    const headers = full.payload?.headers || [];
-    const getHeader = (name: string): string | undefined =>
-      headers.find((header: any) => header.name?.toLowerCase() === name.toLowerCase())?.value ?? undefined;
-    messages.push({
-      id: item.id,
-      from: getHeader('From'),
-      subject: getHeader('Subject'),
-      date: getHeader('Date'),
-      snippet: full.snippet ?? '',
-      body: extractBody(full.payload),
-    });
+    // LandWatch/Land.com reply on the SAME thread, so a single search hit can represent
+    // many listings. Expand each hit into every message in its thread.
+    const threadId = full.threadId || item.id;
+    let threadMsgs: any[] = [full];
+    try {
+      const thread = await gmailGet(`threads/${encodeURIComponent(threadId)}?format=full`);
+      if (Array.isArray(thread.messages) && thread.messages.length) threadMsgs = thread.messages;
+    } catch { /* fall back to the single message */ }
+
+    for (const msg of threadMsgs) {
+      const mid = msg.id || item.id;
+      if (seenMsgIds.has(mid)) continue;
+      seenMsgIds.add(mid);
+      const headers = msg.payload?.headers || [];
+      const getHeader = (name: string): string | undefined =>
+        headers.find((header: any) => header.name?.toLowerCase() === name.toLowerCase())?.value ?? undefined;
+      messages.push({
+        id: mid,
+        from: getHeader('From'),
+        subject: getHeader('Subject'),
+        date: getHeader('Date'),
+        snippet: msg.snippet ?? '',
+        body: extractBody(msg.payload),
+      });
+    }
   }
   return messages;
 }

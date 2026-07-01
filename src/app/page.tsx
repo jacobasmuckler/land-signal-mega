@@ -179,6 +179,23 @@ export default function FinderPage() {
   }
   function focusParcel(p:any){ if(mapRef.current){ mapRef.current.setView(p.center,14); } }
 
+  async function saveParcel(p:any, btn?:HTMLButtonElement){
+    if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+    try{
+      const res = await fetch('/api/parcels/save', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          acres: p.acres, address: p.address, owner: p.owner, zoning: p.zoning,
+          county: p.county, url: p.url || p.listingUrl,
+          lat: p.center?.[0], lon: p.center?.[1],
+          title: p.address || (p.acres ? `${p.acres.toFixed(1)} acres` : 'Saved parcel'),
+        }),
+      });
+      const j = await res.json();
+      if(btn){ btn.textContent = j.already ? '✓ Already saved' : '✓ Saved'; }
+    }catch{ if(btn){ btn.disabled=false; btn.textContent='★ Save parcel'; } }
+  }
+
 
   return (
     <div style={{ display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 53px)' }}>
@@ -229,12 +246,18 @@ export default function FinderPage() {
             background:'var(--ink2)', border:'1px solid var(--line)', borderRadius:12, padding:12 }}>
             <div className="mono" style={{ fontSize:11, color:'var(--muted)', marginBottom:10 }}>{results.length} parcels</div>
             {[...results].sort((a,b)=>(b.acres||0)-(a.acres||0)).slice(0,200).map(p=>(
-              <div key={p.__id} onClick={()=>focusParcel(p)} className="card" style={{ padding:'11px 12px', marginBottom:8, cursor:'pointer' }}>
-                <div className="display" style={{ fontWeight:600, fontSize:13.5 }}>{p.acres!=null?p.acres.toFixed(1)+' acres':'Acreage n/a'}</div>
-                <div className="mono" style={{ fontSize:11.5, color:'var(--muted)', marginTop:4 }}>
-                  {p.address || '—'}{p.zoning?` · ${p.zoning}`:''}{p.distance!=null?` · ${p.distance.toFixed(1)} mi`:''}
+              <div key={p.__id} className="card" style={{ padding:'11px 12px', marginBottom:8 }}>
+                <div onClick={()=>focusParcel(p)} style={{ cursor:'pointer' }}>
+                  <div className="display" style={{ fontWeight:600, fontSize:13.5 }}>{p.acres!=null?p.acres.toFixed(1)+' acres':'Acreage n/a'}</div>
+                  <div className="mono" style={{ fontSize:11.5, color:'var(--muted)', marginTop:4 }}>
+                    {p.address || '—'}{p.zoning?` · ${p.zoning}`:''}{p.distance!=null?` · ${p.distance.toFixed(1)} mi`:''}
+                  </div>
+                  {p.owner && <div className="mono" style={{ fontSize:11, color:'var(--muted)', marginTop:2 }}>Owner: {p.owner}</div>}
                 </div>
-                {p.owner && <div className="mono" style={{ fontSize:11, color:'var(--muted)', marginTop:2 }}>Owner: {p.owner}</div>}
+                <button className="btn" style={{ padding:'4px 10px', fontSize:12, marginTop:8 }}
+                  onClick={(e)=>{ e.stopPropagation(); saveParcel(p, e.currentTarget); }}>
+                  ★ Save parcel
+                </button>
               </div>
             ))}
           </div>

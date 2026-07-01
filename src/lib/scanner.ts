@@ -25,13 +25,16 @@ export async function runScan(override?: { query?: string; maxResults?: number }
 
   async function saveOne(parsed: ParsedListing, emailId: string): Promise<boolean> {
     if (!parsed.acreage || parsed.acreage < minAcres) return false;
-    const already = await prisma.listing.findFirst({
-      where: { OR: [
-        parsed.listingUrl ? { listingUrl: parsed.listingUrl } : undefined,
-        parsed.address ? { address: parsed.address, acreage: parsed.acreage } : undefined,
-      ].filter(Boolean) as any }
-    });
-    if (already) return false;
+    // Dedup by listing URL if present; otherwise by address+acreage. Never skip solely
+    // because the URL is blank (threaded LandWatch messages often omit clean URLs).
+    const orConds = [
+      parsed.listingUrl ? { listingUrl: parsed.listingUrl } : undefined,
+      parsed.address ? { address: parsed.address, acreage: parsed.acreage } : undefined,
+    ].filter(Boolean) as any[];
+    if (orConds.length) {
+      const already = await prisma.listing.findFirst({ where: { OR: orConds } });
+      if (already) return false;
+    }
 
     let lat: number | undefined, lng: number | undefined, distance: number | undefined;
     if (parsed.address) {
@@ -43,18 +46,24 @@ export async function runScan(override?: { query?: string; maxResults?: number }
     const pricePerAcre = parsed.price ? parsed.price / parsed.acreage : undefined;
     const fitScore = calculateFitScore({ acreage: parsed.acreage, distance, pricePerAcre, brokerEmail: parsed.brokerEmail, brokerPhone: parsed.brokerPhone });
 
-    const listing = await prisma.listing.create({ data: {
-      source: parsed.source, title: parsed.title, listingUrl: parsed.listingUrl, address: parsed.address, county: parsed.county, acreage: parsed.acreage,
-      price: parsed.price, priceText: parsed.priceText, pricePerAcre, latitude: lat, longitude: lng, distanceFromCharlotte: distance,
-      brokerEmail: parsed.brokerEmail, brokerPhone: parsed.brokerPhone, rawEmailId: emailId, rawSnippet: parsed.rawSnippet, fitScore,
-      marketStage: parsed.marketStage, locationVerified, status: locationVerified ? 'New' : 'Needs location'
-    }});
-    listingsCreated++;
-    if (parsed.acreage >= minAcres && distance != null && distance <= radiusMiles) {
-      const sent = await sendListingAlert(listing, settings.alertEmail);
-      if (sent) { alertsSent++; await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } }); }
+    try {
+      const listing = await prisma.listing.create({ data: {
+        source: parsed.source, title: parsed.title, listingUrl: parsed.listingUrl || undefined, address: parsed.address, county: parsed.county, acreage: parsed.acreage,
+        price: parsed.price, priceText: parsed.priceText, pricePerAcre, latitude: lat, longitude: lng, distanceFromCharlotte: distance,
+        brokerEmail: parsed.brokerEmail, brokerPhone: parsed.brokerPhone, rawEmailId: emailId, rawSnippet: parsed.rawSnippet, fitScore,
+        marketStage: parsed.marketStage, locationVerified, status: locationVerified ? 'New' : 'Needs location'
+      }});
+      listingsCreated++;
+      if (parsed.acreage >= minAcres && distance != null && distance <= radiusMiles) {
+        const sent = await sendListingAlert(listing, settings.alertEmail);
+        if (sent) { alertsSent++; await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } }); }
+      }
+      return true;
+    } catch (e: any) {
+      // Unique-URL collision (same listing seen twice in a thread) — not an error, just skip.
+      if (e?.code === 'P2002') return false;
+      throw e;
     }
-    return true;
   }
 
   try {
