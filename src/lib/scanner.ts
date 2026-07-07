@@ -9,6 +9,7 @@ import { sendListingAlert } from './alerts';
 
 const ALLOWED_SOURCES = ['LandWatch', 'Crexi'];
 const SAFE_GMAIL_QUERY = 'newer_than:7d (from:crexi OR from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com) -subject:"weekly report" -subject:"daily report" -subject:recap';
+const IS_SCHEDULED_SERVICE = /scheduled/i.test(process.env.RAILWAY_SERVICE_NAME || '');
 
 function isAllowedEmail(email: { from?: string; subject?: string; snippet?: string }) {
   const source = guessSource(`${email.from || ''} ${email.subject || ''}`);
@@ -94,7 +95,7 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
         marketStage: parsed.marketStage, locationVerified, status: 'New'
       }});
       listingsCreated++;
-      if (override?.sendAlerts !== false) {
+      if (override?.sendAlerts !== false && !IS_SCHEDULED_SERVICE) {
         const sent = await sendListingAlert(listing, settings.alertEmail);
         if (sent) { alertsSent++; await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } }); }
       }

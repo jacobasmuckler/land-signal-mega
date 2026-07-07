@@ -11,7 +11,15 @@ export async function sendListingAlert(listing: Listing, toEmail?: string) {
   const pass = process.env.SMTP_PASS;
   if (!host || !user || !pass) return false;
 
-  const transporter = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } });
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+    connectionTimeout: 8000,
+    greetingTimeout: 8000,
+    socketTimeout: 12000,
+  });
   const price = listing.price ? `$${Math.round(listing.price).toLocaleString()}` : listing.priceText || 'Unknown';
   const ppa = listing.pricePerAcre ? `$${Math.round(listing.pricePerAcre).toLocaleString()}/acre` : 'Unknown';
   const body = `${listing.marketStage.toUpperCase()} LAND OPPORTUNITY FOUND
@@ -28,11 +36,16 @@ Broker contact: ${listing.brokerName || ''} ${listing.brokerPhone || ''} ${listi
 Opportunity stage: ${listing.marketStage}
 Reason flagged: ${listing.acreage} acres with a verified location inside the target radius.
 `;
-  await transporter.sendMail({
-    from: user,
-    to,
-    subject: `${listing.marketStage === 'Pre-Market' ? 'Early land signal' : 'New land listing'}: ${listing.acreage} acres`,
-    text: body
-  });
-  return true;
+  try {
+    await transporter.sendMail({
+      from: user,
+      to,
+      subject: `${listing.marketStage === 'Pre-Market' ? 'Early land signal' : 'New land listing'}: ${listing.acreage} acres`,
+      text: body
+    });
+    return true;
+  } catch (error) {
+    console.error('Listing alert email failed; keeping scan successful:', error);
+    return false;
+  }
 }
