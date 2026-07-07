@@ -23,7 +23,7 @@ export default async function AlertsDashboard() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <form action="/api/backfill" method="post">
-            <button className="btn" title="Pull all past LandWatch / Land.com emails">Backfill LandWatch/Land.com</button>
+            <button className="btn" title="Pull a small batch of older LandWatch / Land.com emails">Backfill small batch</button>
           </form>
           <form action="/api/scan" method="post">
             <button className="btn btn-primary">Scan Now</button>
@@ -91,6 +91,10 @@ export default async function AlertsDashboard() {
                 {listing.address && listing.county && <div className="mono" style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>{listing.address}</div>}
                 <div style={{ marginTop: 8, display: 'flex', gap: 10 }}>
                   {listing.listingUrl && <a href={listing.listingUrl} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12, color: 'var(--cyan)' }}>Open listing →</a>}
+                  <form action={`/api/listings/${listing.id}/utility-research`} method="post">
+                    <input type="hidden" name="redirectTo" value="/alerts" />
+                    <button className="del-row mono" style={{ fontSize: 12, color: 'var(--cyan)' }} type="submit">Research utilities</button>
+                  </form>
                   <form action={`/api/listings/${listing.id}`} method="post">
                     <input type="hidden" name="action" value="delete" />
                     <input type="hidden" name="redirectTo" value="/alerts" />

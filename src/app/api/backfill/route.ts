@@ -10,9 +10,9 @@ export async function POST() {
   try {
     await runScan({
       query: '(from:crexi OR from:landwatch OR from:land.com OR from:support@land.com OR from:landsofamerica OR from:landandfarm OR from:landandfarm.com) -subject:"weekly report" -subject:"daily report" -subject:recap',
-      maxResults: 75,
+      maxResults: 20,
       sendAlerts: false,
-      notePrefix: 'Finished backfill',
+      notePrefix: 'Finished small backfill batch',
       expandThreads: true,
     });
   } catch (error) {
