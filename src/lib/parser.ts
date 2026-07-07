@@ -187,6 +187,10 @@ export function parseListingEmailListings(args: { from?: string; subject?: strin
   // together so saved-search digests do not disappear just because the body is weak.
   const searchableText = `${args.subject || ''}\n${args.snippet || ''}\n${args.body || ''}`;
   for (const block of extractBlocks(searchableText)) {
+    // Crexi digest emails often contain summary text like "37 New Properties
+    // Matching Land" without one real listing URL. Do not save those as fake
+    // listings. Only accept Crexi rows with a property-specific URL.
+    if (source === 'Crexi' && !crexiId(block.url)) continue;
     const acreage = parseAcreage(block.text);
     if (!acreage) continue;
     const price = parsePrice(block.text);
@@ -231,10 +235,13 @@ export function parseListingEmail(args: {
   if (!acreage) return null;
   const price = parsePrice(combined);
   const title = (args.subject || combined.slice(0, 80) || 'Untitled Listing').trim();
+  const source = guessSource(`${args.from || ''} ${args.subject || ''}`);
+  const listingUrl = parseUrl(args.body) || parseUrl(combined);
+  if (source === 'Crexi' && !crexiId(listingUrl)) return null;
   return {
-    source: guessSource(`${args.from || ''} ${args.subject || ''}`),
+    source,
     title,
-    listingUrl: parseUrl(args.body) || parseUrl(combined),
+    listingUrl,
     address: guessAddress(combined),
     county: guessCounty(combined),
     acreage,
