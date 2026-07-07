@@ -1,4 +1,4 @@
-import { runScan } from '../src/lib/scanner';
+import { runScan } from './src/lib/scanner';
 
 const MAX_RUNTIME_MS = 4 * 60 * 1000;
 
