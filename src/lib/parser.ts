@@ -207,7 +207,14 @@ export function parseListingEmailListings(args: { from?: string; subject?: strin
   }
   const seen = new Set<string>();
   return out.filter(l => {
-    const k = `${l.listingUrl || ''}|${l.acreage}`;
+    const k = [
+      l.sourceListingId || '',
+      l.listingUrl || '',
+      l.address || '',
+      l.acreage ?? '',
+      l.price ?? '',
+      l.title.slice(0, 80),
+    ].join('|').toLowerCase();
     if (seen.has(k)) return false;
     seen.add(k); return true;
   });

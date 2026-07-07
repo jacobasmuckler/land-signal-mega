@@ -18,6 +18,22 @@ function isAllowedEmail(email: { from?: string; subject?: string; snippet?: stri
   return true;
 }
 
+function isPropertySpecificUrl(url?: string) {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    const path = u.pathname.toLowerCase();
+    if (host.includes('crexi.com')) return /\/properties\/\d+/.test(path);
+    if (host.includes('landwatch.com') || host.includes('land.com') || host.includes('landsofamerica.com') || host.includes('landandfarm.com')) {
+      return /\/property\/|\/properties\/|\/listing\/|\/land\//.test(path) && !/\/search\b|\/my-landwatch\b|\/saved-search/i.test(path);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export async function runScan(override?: { query?: string; maxResults?: number; sendAlerts?: boolean; notePrefix?: string; expandThreads?: boolean }) {
   const settings = await getSettings();
   const log = await prisma.scanLog.create({ data: { notes: 'Started Gmail scan' } });
@@ -46,11 +62,15 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
     if (!parsed.acreage) return 'noAcreage';
     if (parsed.acreage < minAcres) return 'belowMinAcres';
     if (!parsed.address) return 'missingAddress';
-    // Dedup by listing URL if present; otherwise by address+acreage. Never skip solely
-    // because the URL is blank (threaded LandWatch messages often omit clean URLs).
+    // Dedup only on strong identifiers. LandWatch emails often reuse generic/search/
+    // tracking links, and older parser versions could collapse different listings into
+    // the same address+acreage. Avoid false duplicates by requiring a property-specific
+    // URL or the same address + acreage + price.
+    const listingUrl = isPropertySpecificUrl(parsed.listingUrl) ? parsed.listingUrl : undefined;
     const orConds = [
-      parsed.listingUrl ? { listingUrl: parsed.listingUrl } : undefined,
-      parsed.address ? { address: parsed.address, acreage: parsed.acreage } : undefined,
+      parsed.sourceListingId ? { sourceListingId: parsed.sourceListingId } : undefined,
+      listingUrl ? { listingUrl } : undefined,
+      parsed.address && parsed.price ? { address: parsed.address, acreage: parsed.acreage, price: parsed.price } : undefined,
     ].filter(Boolean) as any[];
     if (orConds.length) {
       const already = await prisma.listing.findFirst({ where: { OR: orConds } });
@@ -68,7 +88,7 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
 
     try {
       const listing = await prisma.listing.create({ data: {
-        source: parsed.source, title: parsed.title, listingUrl: parsed.listingUrl || undefined, address: parsed.address, county: parsed.county, acreage: parsed.acreage,
+        source: parsed.source, sourceListingId: parsed.sourceListingId, title: parsed.title, listingUrl, address: parsed.address, county: parsed.county, acreage: parsed.acreage,
         price: parsed.price, priceText: parsed.priceText, pricePerAcre, latitude: lat, longitude: lng, distanceFromCharlotte: distance,
         brokerEmail: parsed.brokerEmail, brokerPhone: parsed.brokerPhone, rawEmailId: emailId, rawSnippet: parsed.rawSnippet, fitScore,
         marketStage: parsed.marketStage, locationVerified, status: 'New'
