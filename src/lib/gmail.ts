@@ -7,11 +7,20 @@ export type GmailMessage = {
   body: string;
 };
 
+import { getSetting } from './settings';
+
 let cachedAccessToken: { value: string; expiresAt: number } | null = null;
 
 function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is not configured`);
+  return value;
+}
+
+async function getRefreshToken() {
+  const saved = await getSetting('GMAIL_REFRESH_TOKEN');
+  const value = saved || process.env.GMAIL_REFRESH_TOKEN?.trim();
+  if (!value) throw new Error('GMAIL_REFRESH_TOKEN is not configured. Reconnect Gmail in Settings.');
   return value;
 }
 
@@ -58,7 +67,7 @@ async function getAccessToken() {
   const body = new URLSearchParams({
     client_id: requiredEnv('GMAIL_CLIENT_ID'),
     client_secret: requiredEnv('GMAIL_CLIENT_SECRET'),
-    refresh_token: requiredEnv('GMAIL_REFRESH_TOKEN'),
+    refresh_token: await getRefreshToken(),
     grant_type: 'refresh_token',
   });
 
@@ -104,7 +113,7 @@ export async function searchGmailMessages(
   maxResults = 20,
   options: { expandThreads?: boolean } = {}
 ): Promise<GmailMessage[]> {
-  if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_REFRESH_TOKEN) {
+  if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_CLIENT_SECRET) {
     console.warn('Gmail environment variables are missing. Returning an empty scan result.');
     return [];
   }
