@@ -146,7 +146,32 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
       if (one && ALLOWED_SOURCES.includes(one.source)) countSaveResult(await saveOne(one, email.id));
       else skipped.noParsedListing++;
     }
-    const skipSummary = `parsed ${parsedCandidates} candidates; ${needsLocationCount} saved as Needs location; skipped unsupported/report ${skipped.unsupportedSource}, no parsed listing ${skipped.noParsedListing}, no acreage ${skipped.noAcreage}, below ${minAcres} acres ${skipped.belowMinAcres}, duplicate ${skipped.duplicate}, outside ${radiusMiles} miles ${skipped.outsideRadius}${ranOutOfTime ? '; stopped at the 3.5-minute time budget — run Scan Now again to continue where it left off' : ''}`;
+    // Self-heal older "Needs location" rows: retry geocoding a small batch each
+    // scan. Verified-inside-radius rows join the board; verified-outside rows
+    // are removed (they never would have been saved); Good picks are never deleted.
+    let locationsFixed = 0;
+    const retryRows = await prisma.listing.findMany({
+      where: { locationVerified: false, address: { not: null } },
+      orderBy: { dateFound: 'desc' },
+      take: 12,
+    });
+    for (const row of retryRows) {
+      if (Date.now() - startedAt > TIME_BUDGET_MS) break;
+      const geo = await geocodeAddress(row.address as string);
+      if (!geo) continue;
+      const distance = haversineMiles(centerLat, centerLng, geo.lat, geo.lng);
+      if (distance > radiusMiles && row.status !== 'Good') {
+        await prisma.listing.delete({ where: { id: row.id } });
+        continue;
+      }
+      await prisma.listing.update({ where: { id: row.id }, data: {
+        latitude: geo.lat, longitude: geo.lng, distanceFromCharlotte: distance,
+        locationVerified: true, status: row.status === 'Needs location' ? 'New' : row.status,
+      }});
+      locationsFixed++;
+    }
+
+    const skipSummary = `parsed ${parsedCandidates} candidates; ${needsLocationCount} saved as Needs location; ${locationsFixed} older leads got their location fixed; skipped unsupported/report ${skipped.unsupportedSource}, no parsed listing ${skipped.noParsedListing}, no acreage ${skipped.noAcreage}, below ${minAcres} acres ${skipped.belowMinAcres}, duplicate ${skipped.duplicate}, outside ${radiusMiles} miles ${skipped.outsideRadius}${ranOutOfTime ? '; stopped at the 3.5-minute time budget — run Scan Now again to continue where it left off' : ''}`;
     await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: `${override?.notePrefix || 'Finished scan'}: accepted LandWatch/Land.com and Crexi only; Zillow and generic/report emails ignored. ${emailsScanned} emails checked${expandsThreads ? ' after expanding Gmail threads' : ''}, ${listingsCreated} listings added; ${skipSummary}.` } });
     return { emailsScanned, listingsCreated, alertsSent };
   } catch (err: any) {

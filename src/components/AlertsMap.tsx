@@ -62,11 +62,13 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
       const color = STAGE_COLOR[l.marketStage || 'Listed'] || '#6FD6E0';
       L.circleMarker([l.latitude, l.longitude], { radius: 7, color, fillColor: color, fillOpacity: .85, weight: 1.5 })
         .addTo(markerLayer.current)
-        .bindPopup(`<div style="font-family:monospace;font-size:12px;line-height:1.6">
-          <b>${(l.title || '').replace(/</g,'&lt;')}</b><br>
+        .bindPopup(`<div style="font-family:monospace;font-size:12px;line-height:1.6;min-width:180px">
+          ${l.listingUrl
+            ? `<a href="${l.listingUrl}" target="_blank" rel="noreferrer" style="font-weight:700;text-decoration:underline">${(l.title || 'Open listing').replace(/</g,'&lt;')}</a>`
+            : `<b>${(l.title || '').replace(/</g,'&lt;')}</b>`}<br>
           ${l.acreage} ac${l.price ? ' · $' + Math.round(l.price).toLocaleString() : ''}<br>
-          ${l.county ? l.county + ' County' : (l.address || '')}<br>
-          ${l.listingUrl ? `<a href="${l.listingUrl}" target="_blank">Open listing →</a>` : ''}</div>`);
+          ${l.county ? l.county + ' County' : (l.address || '')}${l.distanceFromCharlotte != null ? ' · ' + l.distanceFromCharlotte.toFixed(0) + ' mi' : ''}<br>
+          ${l.listingUrl ? `<a href="${l.listingUrl}" target="_blank" rel="noreferrer" style="font-weight:600">Open listing →</a>` : '<span style="opacity:.6">No listing link in the alert email</span>'}</div>`);
     });
   }, [ready, county, stage, listings]);
 

@@ -111,8 +111,10 @@ export default async function AlertsDashboard() {
                   {(listing.brokerEmail || listing.brokerPhone) && <span>{listing.brokerEmail || listing.brokerPhone}</span>}
                 </div>
                 {listing.address && listing.county && <div className="mono" style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>{listing.address}</div>}
-                <div style={{ marginTop: 8, display: 'flex', gap: 10 }}>
-                  {listing.listingUrl && <a href={listing.listingUrl} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12, color: 'var(--cyan)' }}>Open listing →</a>}
+                <div style={{ marginTop: 10, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {listing.listingUrl
+                    ? <a href={listing.listingUrl} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ padding: '5px 13px', fontSize: 12.5 }}>Open listing ↗</a>
+                    : <span className="mono" style={{ fontSize: 11.5, color: 'var(--muted)' }}>No listing link in the alert email</span>}
                   <form action={`/api/listings/${listing.id}/utility-research`} method="post">
                     <input type="hidden" name="redirectTo" value="/alerts" />
                     <button className="del-row mono" style={{ fontSize: 12, color: 'var(--cyan)' }} type="submit">Research utilities</button>

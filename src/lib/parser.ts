@@ -199,17 +199,25 @@ export function detectMarketStage(text: string): 'Listed' | 'Pre-Market' {
 }
 
 // ── multi-listing digest parsing (LandWatch/Land.com "Saved Searches", Crexi) ──
+function isPropertyUrl(url: string) {
+  return /\/pid\/\d+/i.test(url) || /crexi\.com\/properties\/\d+/i.test(url);
+}
+
 function extractBlocks(body: string): { url?: string; text: string }[] {
   const blocks: { url?: string; text: string }[] = [];
-  const links: string[] = [];
+  // Only PROPERTY links count for pairing. The email also carries logo, nav,
+  // and search links on the same domains — including those shifted the pairing
+  // so listings got each other's URLs (and then deduped each other away).
+  const propertyLinks: string[] = [];
   const anchorRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let m: RegExpExecArray | null;
   while ((m = anchorRe.exec(body))) {
     // Unwrap Mandrill/redirect tracking FIRST — the raw href is usually
     // mandrillapp.com, which would fail the listing-domain test below.
     const href = (unwrapUrl(m[1].replace(/&amp;/gi, '&')) || m[1]).replace(/[?#].*$/, '');
-    if (!/land\.com|landwatch|landsofamerica|landandfarm|crexi\.com\/properties/i.test(href)) continue;
-    links.push(href);
+    if (!/land\.com|landwatch|landsofamerica|landandfarm|crexi\.com/i.test(href)) continue;
+    if (!isPropertyUrl(href)) continue;
+    if (!propertyLinks.includes(href)) propertyLinks.push(href);
     const inner = m[2];
     const alt = inner.match(/alt=["']([^"']+)["']/i)?.[1] || '';
     const text = cleanText(inner + ' ' + alt);
@@ -220,14 +228,26 @@ function extractBlocks(body: string): { url?: string; text: string }[] {
     .replace(/\bView Details\b/gi, ' View Details ')
     .replace(/\bUpdate your saved searches\b[\s\S]*$/i, ' ');
   const starts = Array.from(fullText.matchAll(/(?:\b\d+\s+propert(?:y|ies)\s+)?\$[\d,.]+(?:\s*[kKmM])?\s*(?:[\u2022â€¢·\-–]\s*)?[0-9,.]+\s*(?:acres?|acre|ac\b)/gi));
+  const segments: string[] = [];
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i].index ?? 0;
     const end = starts[i + 1]?.index ?? Math.min(fullText.length, start + 700);
     const segment = fullText.slice(start, end).trim();
-    if (parseAcreage(segment)) {
-      blocks.push({ url: links[i], text: segment });
-    }
+    if (parseAcreage(segment)) segments.push(segment);
   }
+
+  // Pair each text segment with its property link. Match the county named in
+  // the text to the county slug in the URL first; fall back to position only
+  // when the counts line up exactly. A wrong link is worse than no link.
+  const used = new Set<string>();
+  segments.forEach((segment, i) => {
+    let url: string | undefined;
+    const countySlug = segment.match(/,\s*([A-Za-z .'-]+?)\s+County\b/i)?.[1]?.trim().toLowerCase().replace(/[^a-z]+/g, '-');
+    if (countySlug) url = propertyLinks.find(l => !used.has(l) && l.toLowerCase().includes(`/${countySlug}-county-`));
+    if (!url && propertyLinks.length === segments.length && !used.has(propertyLinks[i])) url = propertyLinks[i];
+    if (url) used.add(url);
+    blocks.push({ url, text: segment });
+  });
 
   const seen = new Set<string>();
   return blocks.filter(block => {
