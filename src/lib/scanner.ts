@@ -45,6 +45,7 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
   const centerLng = Number(settings.centerLng || -80.8431);
   const gmailMaxResults = Math.min(500, Math.max(1, Number(override?.maxResults ?? settings.gmailMaxResults ?? 50)));
   const gmailQuery = override?.query || SAFE_GMAIL_QUERY;
+  const expandsThreads = override?.expandThreads === true;
   const skipped = {
     unsupportedSource: 0,
     noParsedListing: 0,
@@ -113,7 +114,7 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
 
   try {
     const emails = await searchGmailMessages(gmailQuery, gmailMaxResults, {
-      expandThreads: override?.expandThreads === true,
+      expandThreads: expandsThreads,
     });
     emailsScanned = emails.length;
     for (const email of emails) {
@@ -134,7 +135,7 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
       else skipped.noParsedListing++;
     }
     const skipSummary = `parsed ${parsedCandidates} candidates; skipped unsupported/report ${skipped.unsupportedSource}, no parsed listing ${skipped.noParsedListing}, no acreage ${skipped.noAcreage}, below ${minAcres} acres ${skipped.belowMinAcres}, missing address ${skipped.missingAddress}, duplicate ${skipped.duplicate}, geocode failed ${skipped.geocodeFailed}, outside ${radiusMiles} miles ${skipped.outsideRadius}`;
-    await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: `${override?.notePrefix || 'Finished scan'}: accepted LandWatch/Land.com and Crexi only; Zillow and generic/report emails ignored. ${emailsScanned} emails checked, ${listingsCreated} listings added; ${skipSummary}.` } });
+    await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: `${override?.notePrefix || 'Finished scan'}: accepted LandWatch/Land.com and Crexi only; Zillow and generic/report emails ignored. ${emailsScanned} emails checked${expandsThreads ? ' after expanding Gmail threads' : ''}, ${listingsCreated} listings added; ${skipSummary}.` } });
     return { emailsScanned, listingsCreated, alertsSent };
   } catch (err: any) {
     await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: err?.message || 'Scan failed' } });

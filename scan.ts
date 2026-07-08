@@ -8,10 +8,10 @@ const timeout = setTimeout(() => {
 }, MAX_RUNTIME_MS);
 
 runScan({
-  maxResults: 15,
-  expandThreads: false,
+  maxResults: 25,
+  expandThreads: true,
   sendAlerts: false,
-  notePrefix: 'Finished scheduled scan',
+  notePrefix: 'Finished scheduled thread scan',
 })
   .then(result => {
     clearTimeout(timeout);
