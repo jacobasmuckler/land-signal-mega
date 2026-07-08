@@ -117,12 +117,19 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
     if (result !== 'created' && result !== 'createdNeedsLocation') skipped[result]++;
   }
 
+  // Hard time budget so a big scan can never hang forever — it stops cleanly,
+  // saves what it found, and notes that another run will pick up the rest.
+  const TIME_BUDGET_MS = 3.5 * 60 * 1000;
+  const startedAt = Date.now();
+  let ranOutOfTime = false;
+
   try {
     const emails = await searchGmailMessages(gmailQuery, gmailMaxResults, {
       expandThreads: expandsThreads,
     });
     emailsScanned = emails.length;
     for (const email of emails) {
+      if (Date.now() - startedAt > TIME_BUDGET_MS) { ranOutOfTime = true; break; }
       if (!isAllowedEmail(email)) {
         skipped.unsupportedSource++;
         continue;
@@ -139,7 +146,7 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
       if (one && ALLOWED_SOURCES.includes(one.source)) countSaveResult(await saveOne(one, email.id));
       else skipped.noParsedListing++;
     }
-    const skipSummary = `parsed ${parsedCandidates} candidates; ${needsLocationCount} saved as Needs location; skipped unsupported/report ${skipped.unsupportedSource}, no parsed listing ${skipped.noParsedListing}, no acreage ${skipped.noAcreage}, below ${minAcres} acres ${skipped.belowMinAcres}, duplicate ${skipped.duplicate}, outside ${radiusMiles} miles ${skipped.outsideRadius}`;
+    const skipSummary = `parsed ${parsedCandidates} candidates; ${needsLocationCount} saved as Needs location; skipped unsupported/report ${skipped.unsupportedSource}, no parsed listing ${skipped.noParsedListing}, no acreage ${skipped.noAcreage}, below ${minAcres} acres ${skipped.belowMinAcres}, duplicate ${skipped.duplicate}, outside ${radiusMiles} miles ${skipped.outsideRadius}${ranOutOfTime ? '; stopped at the 3.5-minute time budget — run Scan Now again to continue where it left off' : ''}`;
     await prisma.scanLog.update({ where: { id: log.id }, data: { finishedAt: new Date(), emailsScanned, listingsCreated, alertsSent, notes: `${override?.notePrefix || 'Finished scan'}: accepted LandWatch/Land.com and Crexi only; Zillow and generic/report emails ignored. ${emailsScanned} emails checked${expandsThreads ? ' after expanding Gmail threads' : ''}, ${listingsCreated} listings added; ${skipSummary}.` } });
     return { emailsScanned, listingsCreated, alertsSent };
   } catch (err: any) {

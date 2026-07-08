@@ -21,8 +21,29 @@ export default async function AlertsDashboard() {
   const listings = await prisma.listing.findMany({ orderBy: { dateFound: 'desc' }, take: 300 });
   const logs = await prisma.scanLog.findMany({ orderBy: { startedAt: 'desc' }, take: 5 });
 
+  // A scan is "running" when the newest log has no finish time yet (scans are
+  // hard-capped at 3.5 min, so anything older than 10 min is a dead run).
+  const newest = logs[0];
+  const scanRunning = !!newest && !newest.finishedAt
+    && Date.now() - new Date(newest.startedAt).getTime() < 10 * 60 * 1000;
+
   return (
     <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+      {scanRunning && (
+        <>
+          {/* auto-refresh every 10s while a scan is in flight */}
+          <meta httpEquiv="refresh" content="10" />
+          <div className="card p-4 flex items-center gap-3" style={{ borderColor: 'var(--cyan)' }}>
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--cyan)', boxShadow: '0 0 10px var(--cyan)' }} />
+            <div>
+              <b style={{ color: 'var(--cyan)' }}>Scan in progress…</b>
+              <span style={{ color: 'var(--muted)', marginLeft: 8, fontSize: 14 }}>
+                started {fmtEastern(newest.startedAt)} — this page refreshes itself; new leads appear as they&apos;re found.
+              </span>
+            </div>
+          </div>
+        </>
+      )}
       <div className="flex justify-between items-center flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold display">For-Sale Alerts</h1>
@@ -30,10 +51,10 @@ export default async function AlertsDashboard() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <form action="/api/backfill" method="post">
-            <button className="btn" title="Pull a small batch of older LandWatch / Land.com emails">Backfill small batch</button>
+            <button className="btn" disabled={scanRunning} style={scanRunning ? { opacity: .45, cursor: 'not-allowed' } : undefined} title="Pull a small batch of older LandWatch / Land.com emails">Backfill small batch</button>
           </form>
           <form action="/api/scan" method="post">
-            <button className="btn btn-primary">Scan Now</button>
+            <button className="btn btn-primary" disabled={scanRunning} style={scanRunning ? { opacity: .45, cursor: 'not-allowed' } : undefined}>{scanRunning ? 'Scanning…' : 'Scan Now'}</button>
           </form>
         </div>
       </div>

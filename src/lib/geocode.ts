@@ -21,7 +21,7 @@ async function geocodeWithCensus(address: string): Promise<GeocodeResult | null>
   try {
     const response = await fetch(url.toString(), {
       headers: { 'User-Agent': 'CharlotteLandScanner/1.0' },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(6_000),
     });
     if (!response.ok) return null;
     const data = await response.json();
@@ -48,7 +48,7 @@ async function geocodeWithNominatim(address: string): Promise<GeocodeResult | nu
   try {
     const response = await fetch(url.toString(), {
       headers: { 'User-Agent': `CharlotteLandScanner/1.0 (${email})` },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(6_000),
     });
     if (!response.ok) return null;
     const data = await response.json();
