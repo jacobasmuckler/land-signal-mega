@@ -11,6 +11,8 @@ export async function POST(req: Request) {
     centerLat: String(form.get('centerLat') || '35.2271'),
     centerLng: String(form.get('centerLng') || '-80.8431'),
     gmailSearchQuery: String(form.get('gmailSearchQuery') || ''),
+    weeklyDigestEnabled: form.get('weeklyDigestEnabled') === 'on' ? 'true' : 'false',
+    weeklyDigestTo: String(form.get('weeklyDigestTo') || ''),
   });
   return relativeRedirect('/settings');
 }

@@ -64,9 +64,39 @@ export function parsePrice(text: string): { price?: number; priceText?: string }
   return { price, priceText: `$${Math.round(price).toLocaleString()}` };
 }
 
+// Email links are usually wrapped in click-tracking redirects. LandWatch/Land.com
+// use Mandrill (mandrillapp.com/track/click?p=<base64url JSON>); others use a plain
+// ?url= / ?u= redirect param. Unwrap so the real listing URL is what we match and store.
+export function unwrapUrl(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  let url = raw;
+  for (let hops = 0; hops < 3; hops++) {
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { break; }
+
+    // Mandrill: the p param is base64url JSON; its "p" field is a JSON string with "url".
+    const mandrillPayload = parsed.searchParams.get('p');
+    if (mandrillPayload && (/mandrillapp\.com/i.test(parsed.hostname) || /\/track\/click/i.test(parsed.pathname))) {
+      try {
+        const outer = JSON.parse(Buffer.from(mandrillPayload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+        const inner = typeof outer.p === 'string' ? JSON.parse(outer.p) : outer.p;
+        const target = inner?.url || outer?.url;
+        if (typeof target === 'string' && /^https?:\/\//i.test(target)) { url = target; continue; }
+      } catch { /* fall through to generic handling */ }
+    }
+
+    const target = parsed.searchParams.get('url') || parsed.searchParams.get('u')
+      || parsed.searchParams.get('redirect') || parsed.searchParams.get('destination');
+    if (target && /^https?:\/\//i.test(target)) { url = target; continue; }
+    break;
+  }
+  return url;
+}
+
 export function parseUrl(text: string): string | undefined {
   const urls = text.match(/https?:\/\/[^\s"'<>]+/gi);
-  return urls?.[0]?.replace(/[),.;]+$/, '');
+  const first = urls?.[0]?.replace(/[),.;]+$/, '');
+  return unwrapUrl(first);
 }
 
 export function parseBrokerEmail(text: string): string | undefined {
@@ -116,6 +146,39 @@ export function guessCounty(text: string): string | undefined {
   return m ? m[1].trim() : undefined;
 }
 
+// LandWatch/Land.com property URLs carry the location as a slug, e.g.
+// /columbus-county-north-carolina-land-for-sale/pid/419115000 or
+// /pageland-south-carolina-farms-and-ranches-for-sale/... Use it as a
+// geocodable fallback when the email text itself has no parseable address.
+const STATE_SLUGS: Record<string, string> = {
+  'north-carolina': 'NC', 'south-carolina': 'SC', 'virginia': 'VA', 'georgia': 'GA', 'tennessee': 'TN',
+};
+function titleCase(slug: string) {
+  return slug.split('-').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+}
+export function locationFromUrl(url?: string): { address: string; county?: string; state: string } | undefined {
+  if (!url) return undefined;
+  let path = '';
+  try { path = new URL(url).pathname.toLowerCase(); } catch { return undefined; }
+  const stateAlt = Object.keys(STATE_SLUGS).join('|');
+  const county = path.match(new RegExp(`([a-z][a-z-]*?)-county-(${stateAlt})\\b`));
+  if (county) {
+    const st = STATE_SLUGS[county[2]];
+    return { address: `${titleCase(county[1])} County, ${st}`, county: titleCase(county[1]), state: st };
+  }
+  const city = path.match(new RegExp(`\\/([a-z][a-z-]*?)-(${stateAlt})-(?:land|farms|ranches|property|properties|real-estate|acreage|homes)`));
+  if (city) {
+    const st = STATE_SLUGS[city[2]];
+    return { address: `${titleCase(city[1])}, ${st}`, state: st };
+  }
+  return undefined;
+}
+
+export function landwatchId(url?: string): string | undefined {
+  const m = url?.match(/\/pid\/(\d+)/i);
+  return m ? `LandWatch:${m[1]}` : undefined;
+}
+
 export function detectPrimaryState(text: string): string | undefined {
   const m = text.match(/,\s*(NC|SC|VA|GA|TN|North Carolina|South Carolina)\b/i);
   if (!m) return undefined;
@@ -142,13 +205,15 @@ function extractBlocks(body: string): { url?: string; text: string }[] {
   const anchorRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let m: RegExpExecArray | null;
   while ((m = anchorRe.exec(body))) {
-    const href = m[1];
-    if (!/land\.com|landwatch|landsofamerica|crexi\.com\/properties/i.test(href)) continue;
-    links.push(href.replace(/[?#].*$/, ''));
+    // Unwrap Mandrill/redirect tracking FIRST — the raw href is usually
+    // mandrillapp.com, which would fail the listing-domain test below.
+    const href = (unwrapUrl(m[1].replace(/&amp;/gi, '&')) || m[1]).replace(/[?#].*$/, '');
+    if (!/land\.com|landwatch|landsofamerica|landandfarm|crexi\.com\/properties/i.test(href)) continue;
+    links.push(href);
     const inner = m[2];
     const alt = inner.match(/alt=["']([^"']+)["']/i)?.[1] || '';
     const text = cleanText(inner + ' ' + alt);
-    if (parseAcreage(text)) blocks.push({ url: href.replace(/[?#].*$/, ''), text });
+    if (parseAcreage(text)) blocks.push({ url: href, text });
   }
 
   const fullText = cleanText(body)
@@ -194,17 +259,20 @@ export function parseListingEmailListings(args: { from?: string; subject?: strin
     const acreage = parseAcreage(block.text);
     if (!acreage) continue;
     const price = parsePrice(block.text);
-    const address = guessAddress(block.text);
+    const urlLoc = locationFromUrl(block.url);
+    // Prefer the address in the email text; fall back to the county/city
+    // encoded in the listing URL so the lead still geocodes.
+    const address = guessAddress(block.text) || urlLoc?.address;
     out.push({
       source,
       title: address || block.text.slice(0, 80) || `${source} land alert`,
       listingUrl: block.url,
       address,
-      state: address ? detectPrimaryState(address) : undefined,
-      county: guessCounty(block.text),
+      state: (address ? detectPrimaryState(address) : undefined) || urlLoc?.state,
+      county: guessCounty(block.text) || urlLoc?.county,
       acreage,
       ...price,
-      sourceListingId: crexiId(block.url),
+      sourceListingId: crexiId(block.url) || landwatchId(block.url),
       rawSnippet: block.text.slice(0, 500),
       marketStage: detectMarketStage(block.text),
     });
@@ -238,12 +306,14 @@ export function parseListingEmail(args: {
   const source = guessSource(`${args.from || ''} ${args.subject || ''}`);
   const listingUrl = parseUrl(args.body) || parseUrl(combined);
   if (source === 'Crexi' && !crexiId(listingUrl)) return null;
+  const urlLoc = locationFromUrl(listingUrl);
   return {
     source,
     title,
     listingUrl,
-    address: guessAddress(combined),
-    county: guessCounty(combined),
+    address: guessAddress(combined) || urlLoc?.address,
+    county: guessCounty(combined) || urlLoc?.county,
+    sourceListingId: crexiId(listingUrl) || landwatchId(listingUrl),
     acreage,
     ...price,
     brokerEmail: parseBrokerEmail(combined),

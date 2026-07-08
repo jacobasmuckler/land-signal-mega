@@ -7,7 +7,14 @@ function money(value?: number | null) {
   return value ? `$${Math.round(value).toLocaleString()}` : '—';
 }
 function miles(value?: number | null) {
-  return value == null ? 'Unverified' : `${value.toFixed(1)} mi`;
+  return value == null ? 'Needs location' : `${value.toFixed(1)} mi`;
+}
+function fmtEastern(value?: Date | null) {
+  if (!value) return 'Never';
+  return value.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }) + ' ET';
 }
 
 export default async function AlertsDashboard() {
@@ -31,18 +38,19 @@ export default async function AlertsDashboard() {
         </div>
       </div>
 
-      <div className="grid md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Total Leads</div><div className="text-3xl font-bold">{listings.length}</div></div>
-        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Good Picks</div><div className="text-3xl font-bold">{listings.filter((l: any) => l.status === 'Good').length}</div></div>
-        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Pre-Market</div><div className="text-3xl font-bold">{listings.filter((l: any) => l.marketStage === 'Pre-Market').length}</div></div>
-        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Alerts Sent</div><div className="text-3xl font-bold">{listings.filter((l: any) => l.alertSent).length}</div></div>
-        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Last Scan</div><div className="text-sm font-semibold">{logs[0]?.startedAt?.toLocaleString() || 'Never'}</div></div>
+        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Good Picks</div><div className="text-3xl font-bold" style={{ color: 'var(--lime)' }}>{listings.filter((l: any) => l.status === 'Good').length}</div></div>
+        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Pre-Market</div><div className="text-3xl font-bold" style={{ color: 'var(--amber)' }}>{listings.filter((l: any) => l.marketStage === 'Pre-Market').length}</div></div>
+        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Needs Location</div><div className="text-3xl font-bold" style={{ color: 'var(--cyan)' }}>{listings.filter((l: any) => !l.locationVerified).length}</div></div>
+        <div className="card p-4"><div className="text-sm" style={{ color: 'var(--muted)' }}>Last Scan</div><div className="text-sm font-semibold" style={{ marginTop: 8 }}>{fmtEastern(logs[0]?.startedAt)}</div></div>
       </div>
 
       {logs[0]?.notes && (
-        <div className="card p-4 mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
-          {logs[0].notes}
-        </div>
+        <details className="card p-4 mono" style={{ color: 'var(--muted)', fontSize: 12 }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text)' }}>Last scan details — {fmtEastern(logs[0]?.startedAt)}</summary>
+          <div style={{ marginTop: 8, lineHeight: 1.7 }}>{logs[0].notes}</div>
+        </details>
       )}
 
       <AlertsMap listings={listings.map((l: any) => ({
@@ -50,15 +58,6 @@ export default async function AlertsDashboard() {
         acreage: l.acreage, price: l.price, latitude: l.latitude, longitude: l.longitude,
         marketStage: l.marketStage, status: l.status, listingUrl: l.listingUrl, distanceFromCharlotte: l.distanceFromCharlotte,
       }))} />
-
-      <div className="card p-4 flex items-center justify-between gap-4 flex-wrap">
-        <div style={{ fontSize: 14, color: 'var(--muted)' }}>
-          Need a clean reset? This removes all rows from the dashboard. It does not delete Gmail emails or scanner settings.
-        </div>
-        <form action="/api/listings/clear-all" method="post">
-          <button className="btn danger" type="submit">Clear all listings</button>
-        </form>
-      </div>
 
       {/* Per-listing cards — no horizontal scroll; review controls sit inline */}
       <div className="space-y-3">
@@ -72,8 +71,10 @@ export default async function AlertsDashboard() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className={listing.marketStage === 'Pre-Market' ? 'pill pill-pre' : 'pill pill-good'}>{listing.marketStage}</span>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--cyan)' }}>{listing.source}</span>
-                  {listing.status === 'Good' && <span className="pill pill-good">Good</span>}
-                  <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>{listing.fitScore}/10</span>
+                  {listing.status === 'Good' && <span className="pill pill-good">★ Good</span>}
+                  {!listing.locationVerified && <span className="pill" style={{ border: '1px solid var(--cyan)', color: 'var(--cyan)' }}>Needs location</span>}
+                  <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>Fit {listing.fitScore}/10</span>
+                  <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>· found {fmtEastern(listing.dateFound)}</span>
                 </div>
                 <h3 className="display" style={{ fontSize: 16, fontWeight: 600, marginTop: 6 }}>
                   {listing.listingUrl
@@ -117,6 +118,19 @@ export default async function AlertsDashboard() {
           </div>
         ))}
       </div>
+
+      {/* Danger zone — kept at the very bottom so nobody wipes the board by accident */}
+      <details className="card p-4" style={{ marginTop: 24 }}>
+        <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--muted)' }}>Danger zone</summary>
+        <div className="flex items-center justify-between gap-4 flex-wrap" style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 14, color: 'var(--muted)' }}>
+            Removes every row from the dashboard. Gmail emails and settings are untouched.
+          </div>
+          <form action="/api/listings/clear-all" method="post">
+            <button className="btn danger" type="submit">Clear all listings</button>
+          </form>
+        </div>
+      </details>
     </div>
   );
 }

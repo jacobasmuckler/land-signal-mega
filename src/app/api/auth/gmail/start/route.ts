@@ -23,6 +23,9 @@ export async function GET(request: Request) {
     state,
     scope: [
       'https://www.googleapis.com/auth/gmail.readonly',
+      // Needed to send the weekly recap + listing alerts via the Gmail API
+      // (Railway blocks SMTP, so this is the only way email goes out).
+      'https://www.googleapis.com/auth/gmail.send',
     ].join(' '),
   });
 

@@ -1,15 +1,8 @@
 import './globals.css';
 import Link from 'next/link';
+import NavLinks from '@/components/NavLinks';
 
 export const metadata = { title: 'Land Signal' };
-
-const LINKS = [
-  { href: '/', label: 'Parcel Finder' },
-  { href: '/alerts', label: 'For-Sale Alerts' },
-  { href: '/saved', label: 'Saved' },
-  { href: '/add', label: 'Add Listing' },
-  { href: '/settings', label: 'Settings' },
-];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -28,14 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--lime)', boxShadow: '0 0 13px var(--lime)' }} />
               <span className="display" style={{ fontWeight: 700, fontSize: 17, letterSpacing: '.04em' }}>LAND SIGNAL</span>
             </Link>
-            <div className="flex gap-1 text-sm">
-              {LINKS.map(l => (
-                <Link key={l.href} href={l.href} className="rounded-lg px-3 py-2"
-                  style={{ color: 'var(--text)' }}>
-                  {l.label}
-                </Link>
-              ))}
-            </div>
+            <NavLinks />
           </div>
         </nav>
         <main>{children}</main>

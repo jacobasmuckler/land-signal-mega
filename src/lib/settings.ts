@@ -8,6 +8,8 @@ const defaults: Record<string, string> = {
   minAcres: '20',
   gmailMaxResults: '100',
   alertEmail: process.env.ALERT_TO_EMAIL || '',
+  weeklyDigestEnabled: 'true',
+  weeklyDigestTo: 'sschuttler@northbridge.llc, jsmuckler@fitprecast.com',
   gmailSearchQuery: 'newer_than:30d (from:crexi OR from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com) -subject:"weekly report" -subject:"daily report" -subject:recap',
 };
 

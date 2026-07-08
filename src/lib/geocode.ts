@@ -1,5 +1,17 @@
 export type GeocodeResult = { lat: number; lng: number };
 
+function unique(values: string[]) {
+  return Array.from(new Set(values.map(v => v.replace(/\s+/g, ' ').trim()).filter(Boolean)));
+}
+
+function cityStateFallback(address: string): string | undefined {
+  const cleaned = address.replace(/\s+/g, ' ').trim();
+  const match = cleaned.match(/,\s*([A-Za-z .'-]{2,45}),\s*(NC|SC|VA|GA|TN|North Carolina|South Carolina)(?:\s+\d{5})?\b/i)
+    || cleaned.match(/\b([A-Za-z .'-]{2,45}),\s*(NC|SC|VA|GA|TN|North Carolina|South Carolina)(?:\s+\d{5})?\b/i);
+  if (!match) return undefined;
+  return `${match[1].trim()}, ${match[2].trim()}, USA`;
+}
+
 async function geocodeWithCensus(address: string): Promise<GeocodeResult | null> {
   const url = new URL('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress');
   url.searchParams.set('address', address);
@@ -23,8 +35,9 @@ async function geocodeWithCensus(address: string): Promise<GeocodeResult | null>
 }
 
 async function geocodeWithNominatim(address: string): Promise<GeocodeResult | null> {
-  const email = process.env.NOMINATIM_EMAIL;
-  if (!email) return null;
+  // NOMINATIM_EMAIL is a politeness header, not a requirement — never let a
+  // missing env var silently disable geocoding (it drops real listings).
+  const email = process.env.NOMINATIM_EMAIL || 'landsignal@fitprecast.com';
   const url = new URL('https://nominatim.openstreetmap.org/search');
   url.searchParams.set('format', 'json');
   url.searchParams.set('limit', '1');
@@ -50,5 +63,23 @@ async function geocodeWithNominatim(address: string): Promise<GeocodeResult | nu
 
 export async function geocodeAddress(address: string): Promise<GeocodeResult | null> {
   if (!address || address.length < 5) return null;
-  return await geocodeWithCensus(address) ?? await geocodeWithNominatim(address);
+  const variants = unique([
+    address,
+    `${address}, USA`,
+    cityStateFallback(address) || '',
+  ]);
+
+  // The Census geocoder only matches real street addresses. County- or
+  // city-level locations ("Chester County, SC") always miss there, so go
+  // straight to Nominatim for those instead of wasting a 10s timeout.
+  const hasStreetNumber = /^\s*\d{1,6}\s+\S/.test(address);
+
+  for (const variant of variants) {
+    const result = hasStreetNumber
+      ? (await geocodeWithCensus(variant) ?? await geocodeWithNominatim(variant))
+      : await geocodeWithNominatim(variant);
+    if (result) return result;
+  }
+
+  return null;
 }
