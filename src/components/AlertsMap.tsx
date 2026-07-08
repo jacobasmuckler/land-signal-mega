@@ -15,13 +15,99 @@ type Listing = {
   marketStage?: string | null; status?: string | null; listingUrl?: string | null; distanceFromCharlotte?: number | null;
 };
 
-declare global { interface Window { L: any; } }
+declare global { interface Window { L: any; SOURCES: any[]; } }
 
 export default function AlertsMap({ listings }: { listings: Listing[] }) {
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markerLayer = useRef<any>(null);
   const overlayLayers = useRef<Record<string, any>>({});
+  const outlineLayer = useRef<any>(null);
+  const listingsRef = useRef<Listing[]>(listings);
+  listingsRef.current = listings;
+  const [outlineMsg, setOutlineMsg] = useState('');
+
+  // "Show exact parcel" in a pin's popup: the pin is only the geocoder's best
+  // point, so we ask the county parcel GIS for a parcel near that point whose
+  // acreage matches the listing, and draw the actual property boundary.
+  useEffect(() => {
+    async function onOutline(e: any) {
+      const l = listingsRef.current.find(x => x.id === e.detail);
+      const L = window.L, map = mapRef.current;
+      if (!l || !map || l.latitude == null || l.longitude == null) return;
+      setOutlineMsg(`Searching county GIS for the exact ~${l.acreage} ac parcel…`);
+      try {
+        if (!window.SOURCES) {
+          await new Promise<void>((res, rej) => {
+            const s = document.createElement('script');
+            s.src = '/sources.js';
+            s.onload = () => res();
+            s.onerror = () => rej(new Error('could not load parcel sources'));
+            document.head.appendChild(s);
+          });
+        }
+        const isSC = COUNTIES.SC.includes(l.county || '') || /,\s*SC\b/.test(l.address || '');
+        const stateName = isSC ? 'south carolina' : 'north carolina';
+        const sources = (window.SOURCES || []).filter((s: any) => s.state?.toLowerCase() === stateName);
+
+        let best: any = null;
+        for (const s of sources.slice(0, 3)) {
+          const base = s.serviceUrl.replace(/\/$/, '') + '/' + s.layerId + '/query';
+          const params = new URLSearchParams();
+          const where: string[] = [];
+          if (s.acreageField && !s.acreageIsCalculated && l.acreage) {
+            const unit = s.acreageUnit === 'sqft' ? 43560 : s.acreageUnit === 'sqm' ? 4046.86 : 1;
+            where.push(`${s.acreageField} >= ${(l.acreage * 0.85 * unit).toFixed(2)}`);
+            where.push(`${s.acreageField} <= ${(l.acreage * 1.15 * unit).toFixed(2)}`);
+          }
+          params.set('where', where.length ? where.join(' AND ') : '1=1');
+          params.set('geometry', `${l.longitude},${l.latitude}`);
+          params.set('geometryType', 'esriGeometryPoint');
+          params.set('inSR', '4326');
+          params.set('distance', '2500');
+          params.set('units', 'esriSRUnit_Meter');
+          params.set('spatialRel', 'esriSpatialRelIntersects');
+          params.set('outSR', '4326');
+          params.set('outFields', '*');
+          params.set('returnGeometry', 'true');
+          params.set('resultRecordCount', '50');
+          params.set('f', 'json');
+          try {
+            const res = await fetch(base + '?' + params.toString());
+            const data = await res.json();
+            const feats = (data.features || []).filter((f: any) => f.geometry?.rings?.length);
+            if (!feats.length) continue;
+            // pick the candidate whose centroid sits closest to the geocoded pin
+            let bestD = Infinity;
+            for (const f of feats) {
+              const ring = f.geometry.rings[0];
+              let x = 0, y = 0;
+              for (const [lo, la] of ring) { x += lo; y += la; }
+              const d = (y / ring.length - l.latitude) ** 2 + (x / ring.length - l.longitude) ** 2;
+              if (d < bestD) { bestD = d; best = { f, label: s.label || s.state }; }
+            }
+            if (best) break;
+          } catch { /* this source is down or doesn't cover here — try the next */ }
+        }
+
+        if (!best) {
+          setOutlineMsg(`No ~${l.acreage} ac parcel found in county GIS near this pin — location stays approximate.`);
+          return;
+        }
+        if (outlineLayer.current) map.removeLayer(outlineLayer.current);
+        outlineLayer.current = L.geoJSON(
+          { type: 'Feature', geometry: { type: 'Polygon', coordinates: best.f.geometry.rings }, properties: {} },
+          { style: { color: '#E8B04B', weight: 2, fillColor: '#E8B04B', fillOpacity: .15 } },
+        ).addTo(map);
+        map.fitBounds(outlineLayer.current.getBounds(), { maxZoom: 16, padding: [40, 40] });
+        setOutlineMsg(`✓ Exact parcel boundary drawn (~${l.acreage} ac match from ${best.label}).`);
+      } catch (err: any) {
+        setOutlineMsg('Parcel lookup failed: ' + (err?.message || 'network error'));
+      }
+    }
+    window.addEventListener('alert-outline', onOutline);
+    return () => window.removeEventListener('alert-outline', onOutline);
+  }, []);
   const [counties, setCounties] = useState<string[]>([]);
   const [stage, setStage] = useState('all');
   const [activeLayers, setActiveLayers] = useState<string[]>([]);
@@ -91,7 +177,8 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
             : `<b>${(l.title || '').replace(/</g,'&lt;')}</b>`}<br>
           ${l.acreage} ac${l.price ? ' · $' + Math.round(l.price).toLocaleString() : ''}<br>
           ${l.county ? l.county + ' County' : (l.address || '')}${l.distanceFromCharlotte != null ? ' · ' + l.distanceFromCharlotte.toFixed(0) + ' mi' : ''}<br>
-          ${l.listingUrl ? `<a href="${l.listingUrl}" target="_blank" rel="noreferrer" style="font-weight:600">Open listing →</a>` : '<span style="opacity:.6">No listing link in the alert email</span>'}</div>`);
+          ${l.listingUrl ? `<a href="${l.listingUrl}" target="_blank" rel="noreferrer" style="font-weight:600">Open listing →</a>` : '<span style="opacity:.6">No listing link in the alert email</span>'}<br>
+          <a href="#" onclick="event.preventDefault();window.dispatchEvent(new CustomEvent('alert-outline',{detail:'${l.id}'}))" style="font-weight:600;color:#E8B04B">◱ Show exact parcel</a></div>`);
     });
   }, [ready, counties, stage, listings]);
 
@@ -131,6 +218,11 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
         })}
       </div>
       <div ref={mapEl} style={{ height: 380, borderRadius: 10, background: '#0B1416' }} />
+      {outlineMsg && (
+        <div className="mono" style={{ fontSize: 11.5, color: outlineMsg.startsWith('✓') ? 'var(--lime)' : 'var(--muted)', marginTop: 8 }}>
+          {outlineMsg}
+        </div>
+      )}
       {/* county chips — click as many as you want; All clears */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 12 }}>
         <button onClick={() => setCounties([])} className="mono"

@@ -11,21 +11,9 @@ export const MAP_LAYERS = [
     url:'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/export' },
   { id:'topo', name:'Topography / contours', note:'USGS 3DEP', color:'#C7A867', type:'tile',
     url:'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}', opacity:.7 },
-  { id:'hydrants', name:'Water hydrants', note:'Charlotte Water + York County', color:'#55E0FF', type:'esriGroup',
-    sources:[
-      { url:'https://cltwmaps.ci.charlotte.nc.us/arcgis/rest/services/Public/CLTW_VFD_Hydrants/MapServer/export' },
-      { url:'https://maps.yorkcounty.gov/arcgis/rest/services/York/York_PublicDev/MapServer/export', layers:'show:1' },
-    ] },
-  { id:'lcwsc-water', name:'Water mains', note:'Lancaster County W&S', color:'#49D6F2', type:'featureGroup',
-    sources:[
-      { url:'https://gis.aecomonline.net/arcgis/rest/services/LCWSC/Water_Sewer/FeatureServer/26/query', kind:'line', color:'#49D6F2' },
-      { url:'https://gis.aecomonline.net/arcgis/rest/services/LCWSC/Water_Sewer/FeatureServer/16/query', kind:'point', color:'#49D6F2' },
-    ] },
-  { id:'lcwsc-sewer', name:'Sewer mains', note:'Lancaster County W&S', color:'#B084FF', type:'featureGroup',
-    sources:[
-      { url:'https://gis.aecomonline.net/arcgis/rest/services/LCWSC/Water_Sewer/FeatureServer/8/query', kind:'line', color:'#B084FF' },
-      { url:'https://gis.aecomonline.net/arcgis/rest/services/LCWSC/Water_Sewer/FeatureServer/7/query', kind:'line', color:'#C9A6FF' },
-    ] },
+  // Hydrant / water-main / sewer-main layers were removed: they only covered
+  // 2-3 counties and looked broken everywhere else. Per-parcel utility answers
+  // come from the ⚡ Research utilities button instead.
 ];
 
 function esriOverlay(L: any, map: any, exportUrl: string, layers?: string) {

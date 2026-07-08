@@ -5,6 +5,17 @@ import { MAP_LAYERS as LAYERS, buildOverlay } from '@/components/mapLayers';
 
 const MILES_TO_M = 1609.34, HARD_CAP = 3000;
 
+// The utility report comes back as light markdown — render **bold** and
+// [label](url) links, escape everything else, and drop tracking tails.
+function formatReport(text: string) {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\?utm_source=openai/g, '')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer" style="color:var(--cyan);text-decoration:underline">$1</a>')
+    .replace(/\*\*(.+?)\*\*/g, '<b style="color:var(--amber)">$1</b>')
+    .replace(/^#+\s*(.+)$/gm, '<b style="color:var(--amber)">$1</b>');
+}
+
 declare global { interface Window { L: any; SOURCES: any[]; } }
 
 export default function FinderPage() {
@@ -50,8 +61,20 @@ export default function FinderPage() {
         setUtilReport({ title, text: 'Utility research failed: ' + (err?.message || 'network error'), loading: false });
       }
     }
+    // "★ Save parcel" in a popup — same save as the sidebar list, with the
+    // popup button itself giving the "✓ Saved" feedback.
+    function onSave(e: any) {
+      const p = resultsRef.current[e.detail];
+      if (!p) return;
+      const btn = document.querySelector('.leaflet-popup-content button[data-save-parcel]') as HTMLButtonElement | null;
+      saveParcel(p, btn || undefined);
+    }
     window.addEventListener('parcel-utility', onUtility);
-    return () => window.removeEventListener('parcel-utility', onUtility);
+    window.addEventListener('parcel-save', onSave);
+    return () => {
+      window.removeEventListener('parcel-utility', onUtility);
+      window.removeEventListener('parcel-save', onSave);
+    };
   }, []);
 
   // load Leaflet + sources, init map
@@ -145,9 +168,14 @@ export default function FinderPage() {
       ${p.distance!=null?p.distance.toFixed(1)+' mi from center<br>':''}
       <small style="color:#6E8A86">${p.sourceLabel}</small><br>
       ${p.owner?`<a href="${skip}" target="_blank">Look up owner →</a><br>`:''}
-      ${p.idx!=null?`<button onclick="window.dispatchEvent(new CustomEvent('parcel-utility',{detail:${p.idx}}))"
-        style="margin-top:6px;padding:4px 10px;border-radius:7px;border:1px solid #55E0FF;background:transparent;color:#55E0FF;cursor:pointer;font-family:inherit;font-size:12px">
-        ⚡ Research utilities</button>`:''}</div>`;
+      ${p.idx!=null?`<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button data-save-parcel onclick="window.dispatchEvent(new CustomEvent('parcel-save',{detail:${p.idx}}))"
+          style="padding:4px 10px;border-radius:7px;border:1px solid #E8B04B;background:transparent;color:#E8B04B;cursor:pointer;font-family:inherit;font-size:12px">
+          ★ Save parcel</button>
+        <button onclick="window.dispatchEvent(new CustomEvent('parcel-utility',{detail:${p.idx}}))"
+          style="padding:4px 10px;border-radius:7px;border:1px solid #55E0FF;background:transparent;color:#55E0FF;cursor:pointer;font-family:inherit;font-size:12px">
+          ⚡ Research utilities</button>
+      </div>`:''}</div>`;
   }
 
   async function runSearch(){
@@ -205,9 +233,10 @@ export default function FinderPage() {
           title: p.address || (p.acres ? `${p.acres.toFixed(1)} acres` : 'Saved parcel'),
         }),
       });
-      const j = await res.json();
+      const j = await res.json().catch(()=>({}));
+      if(!res.ok || j.error) throw new Error(j.error || `save failed (HTTP ${res.status})`);
       if(btn){ btn.textContent = j.already ? '✓ Already saved' : '✓ Saved'; }
-    }catch{ if(btn){ btn.disabled=false; btn.textContent='★ Save parcel'; } }
+    }catch{ if(btn){ btn.disabled=false; btn.textContent='✗ Save failed — tap to retry'; } }
   }
 
 
@@ -264,7 +293,8 @@ export default function FinderPage() {
             </div>
             {utilReport.loading
               ? <div className="mono" style={{ fontSize:12, color:'var(--cyan)' }}>Researching water, sewer, electric &amp; gas for this parcel… usually 20–40 seconds.</div>
-              : <div className="mono" style={{ fontSize:12, whiteSpace:'pre-wrap', lineHeight:1.65 }}>{utilReport.text}</div>}
+              : <div className="mono" style={{ fontSize:12, whiteSpace:'pre-wrap', lineHeight:1.65 }}
+                  dangerouslySetInnerHTML={{ __html: formatReport(utilReport.text) }} />}
           </div>
         )}
         {results.length>0 && (
