@@ -76,6 +76,7 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
           <input type="hidden" name="centerLat" value={s.centerLat} />
           <input type="hidden" name="centerLng" value={s.centerLng} />
           <input type="hidden" name="gmailSearchQuery" value={s.gmailSearchQuery} />
+          {s.instantAlertsEnabled === 'true' && <input type="hidden" name="instantAlertsEnabled" value="on" />}
           <button className="btn btn-primary">Save weekly report settings</button>
         </form>
         <form action="/api/weekly-digest" method="post" className="flex items-end gap-3 flex-wrap" style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
@@ -90,7 +91,11 @@ export default async function SettingsPage({ searchParams }: { searchParams?: { 
       {/* ── Search filters ───────────────────────────────────────────── */}
       <form action="/api/settings" method="post" className="card p-6 space-y-4">
         <h2 className="text-xl font-semibold">Search filters</h2>
-        <div><label className="label">Instant Alert Email</label><input name="alertEmail" defaultValue={s.alertEmail} className="input" /></div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+          <input type="checkbox" name="instantAlertsEnabled" defaultChecked={s.instantAlertsEnabled === 'true'} />
+          Also email me each new listing the moment it&apos;s found <span style={{ color: 'var(--muted)' }}>(off = weekly report only)</span>
+        </label>
+        <div><label className="label">Instant Alert Email (only used if the box above is checked)</label><input name="alertEmail" defaultValue={s.alertEmail} className="input" /></div>
         <div className="grid grid-cols-2 gap-4">
           <div><label className="label">Minimum Acres</label><input name="minAcres" defaultValue={s.minAcres} className="input" /></div>
           <div><label className="label">Radius Miles</label><input name="radiusMiles" defaultValue={s.radiusMiles} className="input" /></div>

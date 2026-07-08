@@ -31,7 +31,8 @@ export async function POST(req: Request) {
     locationVerified: distanceFromCharlotte != null,
     status: distanceFromCharlotte == null ? 'Needs location' : 'New'
   }});
-  if (acreage >= Number(settings.minAcres) && distanceFromCharlotte != null && distanceFromCharlotte <= Number(settings.radiusMiles)) {
+  // Instant alerts are opt-in (Settings); the weekly Monday report is the default.
+  if (settings.instantAlertsEnabled === 'true' && acreage >= Number(settings.minAcres) && distanceFromCharlotte != null && distanceFromCharlotte <= Number(settings.radiusMiles)) {
     const sent = await sendListingAlert(listing, settings.alertEmail);
     if (sent) await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } });
   }

@@ -101,7 +101,9 @@ export async function runScan(override?: { query?: string; maxResults?: number; 
       }});
       listingsCreated++;
       if (!locationVerified) { needsLocationCount++; return 'createdNeedsLocation'; }
-      if (override?.sendAlerts !== false && !IS_SCHEDULED_SERVICE) {
+      // Instant per-listing emails are opt-in (Settings). The team's normal
+      // email is the weekly Monday 9am ET report — not one email per listing.
+      if (settings.instantAlertsEnabled === 'true' && override?.sendAlerts !== false && !IS_SCHEDULED_SERVICE) {
         const sent = await sendListingAlert(listing, settings.alertEmail);
         if (sent) { alertsSent++; await prisma.listing.update({ where: { id: listing.id }, data: { alertSent: true } }); }
       }

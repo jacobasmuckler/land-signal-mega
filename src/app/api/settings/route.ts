@@ -13,6 +13,7 @@ export async function POST(req: Request) {
     gmailSearchQuery: String(form.get('gmailSearchQuery') || ''),
     weeklyDigestEnabled: form.get('weeklyDigestEnabled') === 'on' ? 'true' : 'false',
     weeklyDigestTo: String(form.get('weeklyDigestTo') || ''),
+    instantAlertsEnabled: form.get('instantAlertsEnabled') === 'on' ? 'true' : 'false',
   });
   return relativeRedirect('/settings');
 }

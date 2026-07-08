@@ -10,6 +10,8 @@ const defaults: Record<string, string> = {
   alertEmail: process.env.ALERT_TO_EMAIL || '',
   weeklyDigestEnabled: 'true',
   weeklyDigestTo: 'sschuttler@northbridge.llc, jsmuckler@fitprecast.com',
+  // Per-listing emails are OFF — the team gets the Monday 9am ET weekly report.
+  instantAlertsEnabled: 'false',
   gmailSearchQuery: 'newer_than:30d (from:crexi OR from:landwatch OR from:land.com OR from:landsofamerica OR from:landandfarm OR from:support@land.com) -subject:"weekly report" -subject:"daily report" -subject:recap',
 };
 
