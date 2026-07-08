@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { MAP_LAYERS, buildOverlay } from './mapLayers';
 
 const COUNTIES: Record<string, string[]> = {
   NC: ['Mecklenburg','Gaston','Lincoln','Cleveland','Catawba','Iredell','Rowan','Cabarrus','Stanly','Union','Forsyth','Guilford','Durham','Wake'],
@@ -20,9 +21,31 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markerLayer = useRef<any>(null);
-  const [county, setCounty] = useState('');
+  const overlayLayers = useRef<Record<string, any>>({});
+  const [counties, setCounties] = useState<string[]>([]);
   const [stage, setStage] = useState('all');
+  const [activeLayers, setActiveLayers] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
+
+  function toggleCounty(name: string) {
+    setCounties(prev => prev.includes(name) ? prev.filter(c => c !== name) : [...prev, name]);
+  }
+
+  function toggleLayer(id: string) {
+    const L = window.L, map = mapRef.current;
+    if (!map) return;
+    const def: any = MAP_LAYERS.find(l => l.id === id)!;
+    if (overlayLayers.current[id]) {
+      map.removeLayer(overlayLayers.current[id]);
+      delete overlayLayers.current[id];
+      setActiveLayers(a => a.filter(x => x !== id));
+      return;
+    }
+    const lyr = buildOverlay(L, map, def);
+    lyr.addTo(map);
+    overlayLayers.current[id] = lyr;
+    setActiveLayers(a => [...a, id]);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -49,7 +72,7 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
 
   const STAGE_COLOR: Record<string, string> = { 'Pre-Market': '#E8B04B', Listed: '#6FD6E0' };
   const visible = listings.filter(l => {
-    if (county && l.county !== county) return false;
+    if (counties.length && !counties.includes(l.county || '')) return false;
     if (stage !== 'all' && (l.marketStage || 'Listed') !== stage) return false;
     return true;
   });
@@ -70,43 +93,61 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
           ${l.county ? l.county + ' County' : (l.address || '')}${l.distanceFromCharlotte != null ? ' · ' + l.distanceFromCharlotte.toFixed(0) + ' mi' : ''}<br>
           ${l.listingUrl ? `<a href="${l.listingUrl}" target="_blank" rel="noreferrer" style="font-weight:600">Open listing →</a>` : '<span style="opacity:.6">No listing link in the alert email</span>'}</div>`);
     });
-  }, [ready, county, stage, listings]);
+  }, [ready, counties, stage, listings]);
 
   const allCounties = [...COUNTIES.NC.map(c => [c, 'NC'] as const), ...COUNTIES.SC.map(c => [c, 'SC'] as const)];
   const mapped = visible.filter(l => l.latitude && l.longitude).length;
 
   return (
     <div className="card" style={{ padding: 14 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         <span className="mono" style={{ fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--amber)' }}>Map</span>
-        <select value={county} onChange={e => setCounty(e.target.value)} className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }}>
-          <option value="">All 19 counties</option>
-          <optgroup label="North Carolina">{COUNTIES.NC.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>
-          <optgroup label="South Carolina">{COUNTIES.SC.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>
-        </select>
         <select value={stage} onChange={e => setStage(e.target.value)} className="input" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }}>
           <option value="all">All stages</option>
           <option value="Listed">Listed</option>
           <option value="Pre-Market">Pre-Market</option>
         </select>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
+          {counties.length ? `${counties.length} count${counties.length === 1 ? 'y' : 'ies'} selected` : 'All 19 counties'}
+        </span>
         <span className="mono" style={{ fontSize: 11, color: 'var(--muted)', marginLeft: 'auto' }}>
           {mapped} of {visible.length} mapped{visible.length !== mapped ? ' (rest need geocoding)' : ''}
         </span>
       </div>
+      {/* feasibility layer toggles — same layers as the Parcel Finder */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
+        <span className="mono" style={{ fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--cyan)', alignSelf: 'center', marginRight: 3 }}>Layers</span>
+        {MAP_LAYERS.map(l => {
+          const on = activeLayers.includes(l.id);
+          return (
+            <button key={l.id} onClick={() => toggleLayer(l.id)} disabled={!ready} title={l.note} className="mono"
+              style={{ fontSize: 10.5, padding: '5px 9px', borderRadius: 14, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
+                border: `1px solid ${on ? 'var(--cyan)' : 'var(--line2)'}`,
+                background: on ? 'rgba(111,214,224,.12)' : 'transparent', color: on ? 'var(--cyan)' : 'var(--muted)' }}>
+              <span style={{ width: 7, height: 7, borderRadius: 2, background: l.color }} />
+              {l.name}
+            </button>
+          );
+        })}
+      </div>
       <div ref={mapEl} style={{ height: 380, borderRadius: 10, background: '#0B1416' }} />
+      {/* county chips — click as many as you want; All clears */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 12 }}>
-        <button onClick={() => setCounty('')} className="mono"
+        <button onClick={() => setCounties([])} className="mono"
           style={{ fontSize: 10.5, padding: '5px 9px', borderRadius: 14, cursor: 'pointer', border: '1px solid var(--line2)',
-            background: county === '' ? 'var(--amber)' : 'transparent', color: county === '' ? 'var(--ink)' : 'var(--muted)' }}>
+            background: counties.length === 0 ? 'var(--amber)' : 'transparent', color: counties.length === 0 ? 'var(--ink)' : 'var(--muted)' }}>
           All
         </button>
-        {allCounties.map(([c, s]) => (
-          <button key={c} onClick={() => setCounty(c)} className="mono"
-            style={{ fontSize: 10.5, padding: '5px 9px', borderRadius: 14, cursor: 'pointer', border: '1px solid var(--line2)',
-              background: county === c ? 'var(--amber)' : 'transparent', color: county === c ? 'var(--ink)' : 'var(--muted)' }}>
-            {c} <span style={{ opacity: .5 }}>{s}</span>
-          </button>
-        ))}
+        {allCounties.map(([c, s]) => {
+          const on = counties.includes(c);
+          return (
+            <button key={c} onClick={() => toggleCounty(c)} className="mono"
+              style={{ fontSize: 10.5, padding: '5px 9px', borderRadius: 14, cursor: 'pointer', border: `1px solid ${on ? 'var(--amber)' : 'var(--line2)'}`,
+                background: on ? 'var(--amber)' : 'transparent', color: on ? 'var(--ink)' : 'var(--muted)' }}>
+              {on ? '✓ ' : ''}{c} <span style={{ opacity: .5 }}>{s}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

@@ -1,33 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-
-// 19 target counties
-const LAYERS = [
-  { id:'roads', name:'Public roads', note:'OpenStreetMap', color:'#9FB4AF', type:'tile',
-    url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opacity:.55 },
-  { id:'water', name:'Water & hydrology', note:'USGS NHD', color:'#4FA8C5', type:'esri',
-    url:'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/export' },
-  { id:'flood', name:'FEMA floodplains', note:'FEMA NFHL', color:'#7B6FD6', type:'esri',
-    url:'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/export' },
-  { id:'topo', name:'Topography / contours', note:'USGS 3DEP', color:'#C7A867', type:'tile',
-    url:'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}', opacity:.7 },
-  { id:'hydrants', name:'Water hydrants', note:'Charlotte Water + York County', color:'#55E0FF', type:'esriGroup',
-    sources:[
-      { url:'https://cltwmaps.ci.charlotte.nc.us/arcgis/rest/services/Public/CLTW_VFD_Hydrants/MapServer/export' },
-      { url:'https://maps.yorkcounty.gov/arcgis/rest/services/York/York_PublicDev/MapServer/export', layers:'show:1' },
-    ] },
-  { id:'lcwsc-water', name:'Water mains', note:'Lancaster County W&S', color:'#49D6F2', type:'featureGroup',
-    sources:[
-      { url:'https://gis.aecomonline.net/arcgis/rest/services/LCWSC/Water_Sewer/FeatureServer/26/query', kind:'line', color:'#49D6F2' },
-      { url:'https://gis.aecomonline.net/arcgis/rest/services/LCWSC/Water_Sewer/FeatureServer/16/query', kind:'point', color:'#49D6F2' },
-    ] },
-  { id:'lcwsc-sewer', name:'Sewer mains', note:'Lancaster County W&S', color:'#B084FF', type:'featureGroup',
-    sources:[
-      { url:'https://gis.aecomonline.net/arcgis/rest/services/LCWSC/Water_Sewer/FeatureServer/8/query', kind:'line', color:'#B084FF' },
-      { url:'https://gis.aecomonline.net/arcgis/rest/services/LCWSC/Water_Sewer/FeatureServer/7/query', kind:'line', color:'#C9A6FF' },
-    ] },
-];
+import { MAP_LAYERS as LAYERS, buildOverlay } from '@/components/mapLayers';
 
 const MILES_TO_M = 1609.34, HARD_CAP = 3000;
 
@@ -50,6 +24,35 @@ export default function FinderPage() {
   const [statusMsg, setStatusMsg] = useState('Search a city or jump to a county to begin.');
   const [busy, setBusy] = useState(false);
   const [activeLayers, setActiveLayers] = useState<string[]>([]);
+  const resultsRef = useRef<any[]>([]);
+  const [utilReport, setUtilReport] = useState<{ title: string; text: string; loading: boolean } | null>(null);
+
+  // "⚡ Research utilities" inside a map popup fires this event with the
+  // parcel's index — we run the on-demand lookup and show the report panel.
+  useEffect(() => {
+    async function onUtility(e: any) {
+      const p = resultsRef.current[e.detail];
+      if (!p) return;
+      const title = `${p.acres != null ? p.acres.toFixed(1) + ' ac · ' : ''}${p.address || p.parcel || 'parcel'}`;
+      setUtilReport({ title, text: '', loading: true });
+      try {
+        const res = await fetch('/api/parcels/utility-research', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            acres: p.acres, address: p.address, owner: p.owner, zoning: p.zoning,
+            parcel: p.parcel, county: p.county, state: p.state,
+            lat: p.center?.[0], lon: p.center?.[1],
+          }),
+        });
+        const j = await res.json();
+        setUtilReport({ title, text: j.report || j.error || 'No report returned.', loading: false });
+      } catch (err: any) {
+        setUtilReport({ title, text: 'Utility research failed: ' + (err?.message || 'network error'), loading: false });
+      }
+    }
+    window.addEventListener('parcel-utility', onUtility);
+    return () => window.removeEventListener('parcel-utility', onUtility);
+  }, []);
 
   // load Leaflet + sources, init map
   useEffect(() => {
@@ -122,6 +125,7 @@ export default function FinderPage() {
     return { __id:`${s.stateAbbr}-${a[s.idField]||a.OBJECTID||Math.random()}`, acres:ac!=null&&!isNaN(ac)?ac:null,
       owner:s.ownerField?a[s.ownerField]:null, address:s.addressField?a[s.addressField]:null, parcel:s.parcelField?a[s.parcelField]:null,
       zoning:a.ZONING||a.zoning||a.ZONE||a.Zone_Code||null, sourceLabel:s.label||s.state,
+      county:c.county||null, state:c.state||null,
       distance:hav(c.lat,c.lon,clat,clon), center:[clat,clon], geojson:g };
   }
   async function querySource(s:any,geo:any,mi:number,minA:number,maxA:number|null){
@@ -134,13 +138,16 @@ export default function FinderPage() {
 
   function popupHtml(p:any){
     const skip=`https://www.google.com/search?q=`+encodeURIComponent((p.owner||'')+' '+(p.address||''));
-    return `<div style="font-family:monospace;font-size:12px;line-height:1.7;min-width:180px">
+    return `<div style="font-family:monospace;font-size:12px;line-height:1.7;min-width:190px">
       ${p.acres!=null?`<b style="color:#E8B04B">${p.acres.toFixed(2)} acres</b><br>`:''}
       ${p.address?p.address+'<br>':''}${p.owner?'Owner: '+p.owner+'<br>':''}
       ${p.zoning?'Zoning: '+p.zoning+'<br>':''}${p.parcel?'Parcel: '+p.parcel+'<br>':''}
       ${p.distance!=null?p.distance.toFixed(1)+' mi from center<br>':''}
       <small style="color:#6E8A86">${p.sourceLabel}</small><br>
-      ${p.owner?`<a href="${skip}" target="_blank">Look up owner →</a>`:''}</div>`;
+      ${p.owner?`<a href="${skip}" target="_blank">Look up owner →</a><br>`:''}
+      ${p.idx!=null?`<button onclick="window.dispatchEvent(new CustomEvent('parcel-utility',{detail:${p.idx}}))"
+        style="margin-top:6px;padding:4px 10px;border-radius:7px;border:1px solid #55E0FF;background:transparent;color:#55E0FF;cursor:pointer;font-family:inherit;font-size:12px">
+        ⚡ Research utilities</button>`:''}</div>`;
   }
 
   async function runSearch(){
@@ -167,6 +174,8 @@ export default function FinderPage() {
           for(const f of feats){ const n=normalize(f,s,geo); if(!n)continue; if(n.distance>mi)continue; if(n.acres!=null){ if(n.acres<minA)continue; if(maxA!=null&&n.acres>maxA)continue; } all.push(n); }
         }catch(e:any){ warn.push(`${s.label||s.state}: ${e.message}`); }
       }
+      all.forEach((p,i)=>{ p.idx=i; });
+      resultsRef.current = all;
       for(const p of all) pl.addData({ type:'Feature', geometry:p.geojson, properties:p });
       setResults(all);
       if(all.length){ try{ map.fitBounds(L.featureGroup([pl,circle.current]).getBounds(),{padding:[40,40]}); }catch{} setStatusMsg(`Found ${all.length} parcel(s) ≥ ${minA} ac within ${mi} mi.${warn.length?' Some sources had issues.':''}`); }
@@ -179,68 +188,8 @@ export default function FinderPage() {
     const L=window.L, map=mapRef.current; if(!map)return;
     const def:any=LAYERS.find(l=>l.id===id)!;
     if(overlayLayers.current[id]){ map.removeLayer(overlayLayers.current[id]); delete overlayLayers.current[id]; setActiveLayers(a=>a.filter(x=>x!==id)); return; }
-    let lyr:any;
-    if(def.type==='tile'){ lyr=L.tileLayer(def.url,{opacity:def.opacity||.6,subdomains:'abc',maxZoom:19,attribution:def.note}); }
-    else if(def.type==='esriGroup'){ lyr=esriOverlayGroup(def.sources || []); }
-    else if(def.type==='featureGroup'){ lyr=arcgisFeatureOverlay(def.sources || []); }
-    else { lyr=esriOverlay(def.url, def.layers); }
+    const lyr=buildOverlay(L, map, def);
     lyr.addTo(map); overlayLayers.current[id]=lyr; setActiveLayers(a=>[...a,id]);
-  }
-  function esriOverlay(exportUrl:string, layers?: string){
-    const L=window.L, map=mapRef.current; const group=L.layerGroup(); let img:any=null;
-    function refresh(){ const b=map.getBounds(),size=map.getSize();
-      const params:any = { bbox:[b.getWest(),b.getSouth(),b.getEast(),b.getNorth()].join(','), bboxSR:'4326', imageSR:'3857', size:`${size.x},${size.y}`, format:'png32', transparent:'true', f:'image' };
-      if(layers) params.layers = layers;
-      const u=exportUrl+'?'+new URLSearchParams(params);
-      if(img)group.removeLayer(img); img=L.imageOverlay(u,b,{opacity:.6}); group.addLayer(img); }
-    group.on('add',()=>{refresh();map.on('moveend',refresh);}); group.on('remove',()=>map.off('moveend',refresh));
-    return group;
-  }
-  function esriOverlayGroup(sources:any[]){
-    const L=window.L; const group=L.layerGroup(); const children:any[] = [];
-    group.on('add',()=>{
-      for(const src of sources){ const child=esriOverlay(src.url, src.layers); children.push(child); child.addTo(group); }
-    });
-    group.on('remove',()=>{ for(const child of children) group.removeLayer(child); children.length=0; });
-    return group;
-  }
-  function arcgisFeatureOverlay(sources:any[]){
-    const L=window.L, map=mapRef.current; const group=L.layerGroup(); let alive=true, timer:any=null;
-    function esriToGeoJSON(feature:any){
-      const g=feature.geometry;
-      if(!g)return null;
-      if(typeof g.x==='number'&&typeof g.y==='number')return { type:'Point', coordinates:[g.x,g.y] };
-      if(Array.isArray(g.paths))return { type:'MultiLineString', coordinates:g.paths };
-      if(Array.isArray(g.rings))return { type:'Polygon', coordinates:g.rings };
-      return null;
-    }
-    async function refresh(){
-      if(!alive)return;
-      group.clearLayers();
-      const b=map.getBounds();
-      for(const src of sources){
-        try{
-          const params=new URLSearchParams({
-            f:'json', where:'1=1', outFields:'*', returnGeometry:'true', outSR:'4326',
-            geometry:[b.getWest(),b.getSouth(),b.getEast(),b.getNorth()].join(','),
-            geometryType:'esriGeometryEnvelope', inSR:'4326', spatialRel:'esriSpatialRelIntersects',
-            resultRecordCount:'1000',
-          });
-          const res=await fetch(src.url+'?'+params.toString());
-          const data=await res.json();
-          const features=(data.features||[]).map((f:any)=>({ type:'Feature', geometry:esriToGeoJSON(f), properties:f.attributes||{} })).filter((f:any)=>f.geometry);
-          const layer=L.geoJSON({ type:'FeatureCollection', features }, {
-            pointToLayer:(_f:any,latlng:any)=>L.circleMarker(latlng,{ radius:4, color:src.color||'#55E0FF', fillColor:src.color||'#55E0FF', fillOpacity:.9, weight:1 }),
-            style:()=>({ color:src.color||'#55E0FF', weight:2.5, opacity:.85, fillOpacity:.12 }),
-          });
-          layer.addTo(group);
-        }catch{}
-      }
-    }
-    function delayed(){ clearTimeout(timer); timer=setTimeout(refresh,250); }
-    group.on('add',()=>{ alive=true; refresh(); map.on('moveend',delayed); });
-    group.on('remove',()=>{ alive=false; clearTimeout(timer); map.off('moveend',delayed); group.clearLayers(); });
-    return group;
   }
   function focusParcel(p:any){ if(mapRef.current){ mapRef.current.setView(p.center,14); } }
 
@@ -306,6 +255,18 @@ export default function FinderPage() {
           background:'rgba(15,27,30,.94)', border:'1px solid var(--line2)', borderRadius:9, padding:'10px 14px', fontSize:12.5, backdropFilter:'blur(4px)' }}>
           {statusMsg}
         </div>
+        {utilReport && (
+          <div style={{ position:'absolute', top:14, left:14, width:410, maxWidth:'48%', maxHeight:'calc(100% - 28px)', overflowY:'auto', zIndex:950,
+            background:'var(--ink2)', border:'1px solid var(--cyan)', borderRadius:12, padding:14 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8, marginBottom:8 }}>
+              <b style={{ fontSize:13 }}>⚡ Utilities — {utilReport.title}</b>
+              <button onClick={()=>setUtilReport(null)} className="btn" style={{ padding:'2px 9px', fontSize:12, flex:'none' }}>✕</button>
+            </div>
+            {utilReport.loading
+              ? <div className="mono" style={{ fontSize:12, color:'var(--cyan)' }}>Researching water, sewer, electric &amp; gas for this parcel… usually 20–40 seconds.</div>
+              : <div className="mono" style={{ fontSize:12, whiteSpace:'pre-wrap', lineHeight:1.65 }}>{utilReport.text}</div>}
+          </div>
+        )}
         {results.length>0 && (
           <div style={{ position:'absolute', top:14, right:14, width:330, maxHeight:'calc(100% - 28px)', overflowY:'auto', zIndex:900,
             background:'var(--ink2)', border:'1px solid var(--line)', borderRadius:12, padding:12 }}>
