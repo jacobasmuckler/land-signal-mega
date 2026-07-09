@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { MAP_LAYERS as LAYERS, buildOverlay } from '@/components/mapLayers';
+import { downloadDXF, downloadSHP } from '@/components/parcelExport';
 
 const MILES_TO_M = 1609.34, HARD_CAP = 3000;
 
@@ -35,21 +36,21 @@ export default function FinderPage() {
   const [statusMsg, setStatusMsg] = useState('Search a city or jump to a county to begin.');
   const [busy, setBusy] = useState(false);
   const [activeLayers, setActiveLayers] = useState<string[]>([]);
+  const [parcelNo, setParcelNo] = useState('');
   const resultsRef = useRef<any[]>([]);
   const [utilReport, setUtilReport] = useState<{ title: string; text: string; loading: boolean } | null>(null);
 
-  // "⚡ Research utilities" inside a map popup fires this event with the
-  // parcel's index — we run the on-demand lookup and show the report panel.
+  // Map-popup buttons fire CustomEvents with the parcel's index — research,
+  // exports, and comps all hang off these listeners.
   useEffect(() => {
-    async function onUtility(e: any) {
-      const p = resultsRef.current[e.detail];
-      if (!p) return;
+    async function research(p: any, mode: 'utilities' | 'full') {
       const title = `${p.acres != null ? p.acres.toFixed(1) + ' ac · ' : ''}${p.address || p.parcel || 'parcel'}`;
       setUtilReport({ title, text: '', loading: true });
       try {
         const res = await fetch('/api/parcels/utility-research', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            mode,
             acres: p.acres, address: p.address, owner: p.owner, zoning: p.zoning,
             parcel: p.parcel, county: p.county, state: p.state,
             lat: p.center?.[0], lon: p.center?.[1],
@@ -58,8 +59,34 @@ export default function FinderPage() {
         const j = await res.json();
         setUtilReport({ title, text: j.report || j.error || 'No report returned.', loading: false });
       } catch (err: any) {
-        setUtilReport({ title, text: 'Utility research failed: ' + (err?.message || 'network error'), loading: false });
+        setUtilReport({ title, text: 'Research failed: ' + (err?.message || 'network error'), loading: false });
       }
+    }
+    function onUtility(e: any) { const p = resultsRef.current[e.detail]; if (p) research(p, 'utilities'); }
+    function onFullReport(e: any) { const p = resultsRef.current[e.detail]; if (p) research(p, 'full'); }
+
+    // ⬇ DXF / Shapefile — export the parcel boundary for AutoCAD or GIS.
+    async function onExport(e: any) {
+      const p = resultsRef.current[e.detail?.idx];
+      const rings = p?.geojson?.coordinates;
+      if (!rings?.length) return;
+      const name = p.parcel || p.address || `${(p.acres || 0).toFixed(1)}ac_parcel`;
+      try {
+        if (e.detail.fmt === 'dxf') downloadDXF(rings, name);
+        else await downloadSHP(rings, name, { acres: p.acres ?? null, address: p.address ?? '', owner: p.owner ?? '', parcel: p.parcel ?? '', zoning: p.zoning ?? '' });
+      } catch (err: any) {
+        setStatusMsg('Export failed: ' + (err?.message || 'unknown error'));
+      }
+    }
+
+    // ≈ Similar lots — rerun the search centered on this parcel, ±25% acreage, 5 mi.
+    function onSimilar(e: any) {
+      const p = resultsRef.current[e.detail];
+      if (!p?.center || p.acres == null) return;
+      const geo = { lat: p.center[0], lon: p.center[1], state: p.state, county: p.county, label: p.address || 'this parcel' };
+      const minA = Math.max(1, Math.round(p.acres * 0.75)), maxA = Math.ceil(p.acres * 1.25);
+      setRadius(5); setMinAcres(minA); setMaxAcres(String(maxA));
+      runSearchRef.current?.({ geo, mi: 5, minA, maxA });
     }
     // "★ Save parcel" in a popup — same save as the sidebar list, with the
     // popup button itself giving the "✓ Saved" feedback.
@@ -70,9 +97,15 @@ export default function FinderPage() {
       saveParcel(p, btn || undefined);
     }
     window.addEventListener('parcel-utility', onUtility);
+    window.addEventListener('parcel-fullreport', onFullReport);
+    window.addEventListener('parcel-export', onExport);
+    window.addEventListener('parcel-similar', onSimilar);
     window.addEventListener('parcel-save', onSave);
     return () => {
       window.removeEventListener('parcel-utility', onUtility);
+      window.removeEventListener('parcel-fullreport', onFullReport);
+      window.removeEventListener('parcel-export', onExport);
+      window.removeEventListener('parcel-similar', onSimilar);
       window.removeEventListener('parcel-save', onSave);
     };
   }, []);
@@ -122,11 +155,26 @@ export default function FinderPage() {
     return r.json();
   }
   async function geocode(q:string){
-    const url='https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=us&limit=1&q='+encodeURIComponent(q);
-    const d=await fetchJson(url);
-    if(!Array.isArray(d)||!d.length)return null;
-    const r=d[0];
-    return { lat:+r.lat, lon:+r.lon, state:(r.address&&(r.address.state||r.address.territory))||null, county:r.address&&r.address.county||null, label:r.display_name };
+    try{
+      const url='https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=us&limit=1&q='+encodeURIComponent(q);
+      const d=await fetchJson(url);
+      if(Array.isArray(d)&&d.length){
+        const r=d[0];
+        return { lat:+r.lat, lon:+r.lon, state:(r.address&&(r.address.state||r.address.territory))||null, county:r.address&&r.address.county||null, label:r.display_name };
+      }
+    }catch{ /* fall through to the server chain */ }
+    // Nominatim misses many rural street addresses — fall back to our server's
+    // Census→Nominatim→Photon chain, then reverse-geocode for county/state.
+    try{
+      const r=await fetchJson('/api/geocode?q='+encodeURIComponent(q));
+      if(typeof r?.lat!=='number')return null;
+      let state=null, county=null, label=q;
+      try{
+        const rev=await fetchJson(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${r.lat}&lon=${r.lng}`);
+        state=rev.address?.state||null; county=rev.address?.county||null; label=rev.display_name||q;
+      }catch{}
+      return { lat:r.lat, lon:r.lng, state, county, label };
+    }catch{ return null; }
   }
   function buildUrl(s:any,lon:number,lat:number,mi:number,minA:number,maxA:number|null,opt:any={}){
     const base=s.serviceUrl.replace(/\/$/,'')+'/'+s.layerId+'/query',p=new URLSearchParams(),w:string[]=[];
@@ -168,30 +216,47 @@ export default function FinderPage() {
       ${p.distance!=null?p.distance.toFixed(1)+' mi from center<br>':''}
       <small style="color:#6E8A86">${p.sourceLabel}</small><br>
       ${p.owner?`<a href="${skip}" target="_blank">Look up owner →</a><br>`:''}
-      ${p.idx!=null?`<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+      ${p.idx!=null?`<div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;max-width:230px">
         <button data-save-parcel onclick="window.dispatchEvent(new CustomEvent('parcel-save',{detail:${p.idx}}))"
-          style="padding:4px 10px;border-radius:7px;border:1px solid #E8B04B;background:transparent;color:#E8B04B;cursor:pointer;font-family:inherit;font-size:12px">
-          ★ Save parcel</button>
+          style="padding:4px 9px;border-radius:7px;border:1px solid #E8B04B;background:transparent;color:#E8B04B;cursor:pointer;font-family:inherit;font-size:11.5px">
+          ★ Save</button>
         <button onclick="window.dispatchEvent(new CustomEvent('parcel-utility',{detail:${p.idx}}))"
-          style="padding:4px 10px;border-radius:7px;border:1px solid #55E0FF;background:transparent;color:#55E0FF;cursor:pointer;font-family:inherit;font-size:12px">
-          ⚡ Research utilities</button>
+          style="padding:4px 9px;border-radius:7px;border:1px solid #55E0FF;background:transparent;color:#55E0FF;cursor:pointer;font-family:inherit;font-size:11.5px">
+          ⚡ Utilities</button>
+        <button onclick="window.dispatchEvent(new CustomEvent('parcel-fullreport',{detail:${p.idx}}))"
+          style="padding:4px 9px;border-radius:7px;border:1px solid #B084FF;background:transparent;color:#B084FF;cursor:pointer;font-family:inherit;font-size:11.5px">
+          📋 Zoning · schools · comps</button>
+        <button onclick="window.dispatchEvent(new CustomEvent('parcel-similar',{detail:${p.idx}}))"
+          style="padding:4px 9px;border-radius:7px;border:1px solid #9FE870;background:transparent;color:#9FE870;cursor:pointer;font-family:inherit;font-size:11.5px">
+          ≈ Similar lots</button>
+        <button onclick="window.dispatchEvent(new CustomEvent('parcel-export',{detail:{idx:${p.idx},fmt:'dxf'}}))"
+          style="padding:4px 9px;border-radius:7px;border:1px solid #9FB4AF;background:transparent;color:#9FB4AF;cursor:pointer;font-family:inherit;font-size:11.5px">
+          ⬇ DXF (CAD)</button>
+        <button onclick="window.dispatchEvent(new CustomEvent('parcel-export',{detail:{idx:${p.idx},fmt:'shp'}}))"
+          style="padding:4px 9px;border-radius:7px;border:1px solid #9FB4AF;background:transparent;color:#9FB4AF;cursor:pointer;font-family:inherit;font-size:11.5px">
+          ⬇ Shapefile</button>
       </div>`:''}</div>`;
   }
 
-  async function runSearch(){
+  async function runSearch(override?: { geo?: any; mi?: number; minA?: number; maxA?: number|null }){
     if(!ready)return;
     const L=window.L, map=mapRef.current, pl=parcelLayerRef.current;
     setBusy(true); setResults([]); pl.clearLayers();
     if(centerMarker.current){map.removeLayer(centerMarker.current);centerMarker.current=null;}
     if(circle.current){map.removeLayer(circle.current);circle.current=null;}
     try{
-      const mi=radius, minA=minAcres||0, maxA=maxAcres?parseFloat(maxAcres):null;
-      setStatusMsg('Locating place…');
-      const geo=await geocode(city);
+      // A street number in the search box means "find THIS parcel": shrink the
+      // search to the geocoded point and ignore the acreage filters.
+      const isAddress = !override && /^\s*\d+\s+\S+/.test(city);
+      const mi = override?.mi ?? (isAddress ? 0.06 : radius);
+      const minA = override?.minA ?? (isAddress ? 0 : (minAcres||0));
+      const maxA = override?.maxA !== undefined ? override.maxA : (isAddress ? null : (maxAcres?parseFloat(maxAcres):null));
+      setStatusMsg(isAddress ? 'Locating that address…' : 'Locating place…');
+      const geo = override?.geo ?? await geocode(city);
       if(!geo){ setStatusMsg('Couldn\u2019t find that U.S. place. Try adding a state, e.g. "Shelby, NC".'); setBusy(false); return; }
       centerMarker.current=L.marker([geo.lat,geo.lon]).addTo(map);
       circle.current=L.circle([geo.lat,geo.lon],{radius:mi*MILES_TO_M,color:'#6FD6E0',weight:1,fillColor:'#6FD6E0',fillOpacity:.05}).addTo(map);
-      map.setView([geo.lat,geo.lon],11);
+      map.setView([geo.lat,geo.lon],isAddress?15:11);
       const sources=srcForLoc(geo);
       if(!sources.length){ setStatusMsg(`Found ${geo.label.split(',')[0]}, but no free parcel source covers ${geo.county||geo.state||'that area'} yet. NC is statewide; in SC, York & Greenville are wired — Lancaster, Chester & Spartanburg need a source added.`); setBusy(false); return; }
       setStatusMsg(`Searching ${sources.length} source(s) near ${geo.label.split(',')[0]}…`);
@@ -199,16 +264,60 @@ export default function FinderPage() {
       for(const s of sources){
         try{
           const feats=await querySource(s,geo,mi,minA,maxA);
-          for(const f of feats){ const n=normalize(f,s,geo); if(!n)continue; if(n.distance>mi)continue; if(n.acres!=null){ if(n.acres<minA)continue; if(maxA!=null&&n.acres>maxA)continue; } all.push(n); }
+          // Address mode: a big parcel's centroid can sit far from the pin —
+          // the GIS already confirmed the point is inside it, so keep it.
+          for(const f of feats){ const n=normalize(f,s,geo); if(!n)continue; if(!isAddress&&n.distance>mi)continue; if(n.acres!=null){ if(n.acres<minA)continue; if(maxA!=null&&n.acres>maxA)continue; } all.push(n); }
         }catch(e:any){ warn.push(`${s.label||s.state}: ${e.message}`); }
       }
       all.forEach((p,i)=>{ p.idx=i; });
       resultsRef.current = all;
       for(const p of all) pl.addData({ type:'Feature', geometry:p.geojson, properties:p });
       setResults(all);
-      if(all.length){ try{ map.fitBounds(L.featureGroup([pl,circle.current]).getBounds(),{padding:[40,40]}); }catch{} setStatusMsg(`Found ${all.length} parcel(s) ≥ ${minA} ac within ${mi} mi.${warn.length?' Some sources had issues.':''}`); }
-      else setStatusMsg(`No parcels matched. Try a larger radius or lower minimum acreage.`);
+      if(all.length){ try{ map.fitBounds(L.featureGroup([pl,circle.current]).getBounds(),{padding:[40,40]}); }catch{}
+        setStatusMsg(isAddress
+          ? `Found ${all.length===1?'the parcel':all.length+' parcels'} at that address — click it on the map for details, save, and exports.`
+          : `Found ${all.length} parcel(s) ≥ ${minA} ac within ${mi} mi.${warn.length?' Some sources had issues.':''}`); }
+      else setStatusMsg(isAddress?`Geocoded the address, but no parcel layer covers that exact point. Try the county name instead.`:`No parcels matched. Try a larger radius or lower minimum acreage.`);
     }catch(e:any){ setStatusMsg('Search failed: '+e.message); }
+    finally{ setBusy(false); }
+  }
+
+  const runSearchRef = useRef<any>(null);
+  runSearchRef.current = runSearch;
+
+  // Parcel-number search: uses the place box to pick the county's GIS, then
+  // matches the parcel field directly (partial matches allowed).
+  async function searchByParcelNo(){
+    if(!ready||!parcelNo.trim())return;
+    const L=window.L, map=mapRef.current, pl=parcelLayerRef.current;
+    setBusy(true); setResults([]); pl.clearLayers();
+    try{
+      setStatusMsg('Locating the county for that parcel #…');
+      const geo=await geocode(city);
+      if(!geo){ setStatusMsg('Enter a city or county in the place box first so I know which county GIS to search.'); setBusy(false); return; }
+      const sources=srcForLoc(geo).filter((s:any)=>s.parcelField);
+      if(!sources.length){ setStatusMsg('No parcel source with parcel numbers covers that area.'); setBusy(false); return; }
+      const value=parcelNo.trim().replace(/'/g,"''");
+      const all:any[]=[];
+      for(const s of sources.slice(0,3)){
+        try{
+          const base=s.serviceUrl.replace(/\/$/,'')+'/'+s.layerId+'/query';
+          const p=new URLSearchParams();
+          p.set('where',`UPPER(${s.parcelField}) LIKE UPPER('%${value}%')`);
+          p.set('outFields','*'); p.set('returnGeometry','true'); p.set('outSR','4326');
+          p.set('resultRecordCount','25'); p.set('f','json');
+          const d=await fetchJson(base+'?'+p.toString());
+          for(const f of (d.features||[])){ const n=normalize(f,s,geo); if(n) all.push(n); }
+        }catch{ /* source down — try the next */ }
+      }
+      all.forEach((p,i)=>{ p.idx=i; });
+      resultsRef.current=all;
+      for(const p of all) pl.addData({ type:'Feature', geometry:p.geojson, properties:p });
+      setResults(all);
+      if(all.length){ try{ map.fitBounds(pl.getBounds(),{padding:[40,40],maxZoom:16}); }catch{}
+        setStatusMsg(`Found ${all.length} parcel(s) matching #${parcelNo.trim()}.`); }
+      else setStatusMsg(`No parcel matching #${parcelNo.trim()} in ${geo.county||'that county'}. Check the number format on the county GIS site.`);
+    }catch(e:any){ setStatusMsg('Parcel # search failed: '+e.message); }
     finally{ setBusy(false); }
   }
 
@@ -245,17 +354,26 @@ export default function FinderPage() {
       {/* sidebar */}
       <aside style={{ background:'var(--ink2)', borderRight:'1px solid var(--line)', overflowY:'auto', padding:'18px 18px 40px' }}>
         <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)', marginBottom:9 }}>Search area</div>
-        <label className="label">City or place (U.S.)</label>
-        <input className="input" style={{ marginBottom:10 }} value={city} onChange={e=>setCity(e.target.value)} placeholder="Gastonia, NC" />
+        <label className="label">City, county, or full address (U.S.)</label>
+        <input className="input" style={{ marginBottom:4 }} value={city} onChange={e=>setCity(e.target.value)} placeholder="Gastonia, NC — or 123 Main St, Shelby, NC" />
+        <div className="mono" style={{ fontSize:10.5, color:'var(--muted)', marginBottom:10 }}>Type a full street address to jump straight to that exact parcel.</div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:9 }}>
           <div><label className="label">Radius (mi)</label><input className="input" type="number" value={radius} onChange={e=>setRadius(+e.target.value)} /></div>
           <div><label className="label">Min acres</label><input className="input" type="number" value={minAcres} onChange={e=>setMinAcres(+e.target.value)} /></div>
         </div>
         <label className="label" style={{ marginTop:10, display:'block' }}>Max acres (optional)</label>
         <input className="input" type="number" value={maxAcres} onChange={e=>setMaxAcres(e.target.value)} placeholder="no max" />
-        <button className="btn btn-primary" style={{ width:'100%', marginTop:12 }} onClick={runSearch} disabled={!ready||busy}>
+        <button className="btn btn-primary" style={{ width:'100%', marginTop:12 }} onClick={()=>runSearch()} disabled={!ready||busy}>
           {busy ? 'Searching…' : 'Find parcels'}
         </button>
+
+        <label className="label" style={{ marginTop:14, display:'block' }}>Or search by parcel #</label>
+        <div style={{ display:'flex', gap:6 }}>
+          <input className="input" value={parcelNo} onChange={e=>setParcelNo(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter') searchByParcelNo(); }} placeholder="e.g. 3579-17-0207" />
+          <button className="btn" style={{ flex:'none', padding:'8px 12px' }} onClick={searchByParcelNo} disabled={!ready||busy||!parcelNo.trim()}>Find</button>
+        </div>
+        <div className="mono" style={{ fontSize:10.5, color:'var(--muted)', marginTop:4 }}>Uses the city/county above to pick the right county records.</div>
 
         <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)', margin:'20px 0 9px' }}>Feasibility layers</div>
         {LAYERS.map(l=>{

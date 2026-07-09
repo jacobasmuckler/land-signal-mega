@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { MAP_LAYERS, buildOverlay } from './mapLayers';
+import { downloadDXF, downloadSHP } from './parcelExport';
 
 const COUNTIES: Record<string, string[]> = {
   NC: ['Mecklenburg','Gaston','Lincoln','Cleveland','Catawba','Iredell','Rowan','Cabarrus','Stanly','Union','Forsyth','Guilford','Durham','Wake'],
@@ -26,6 +27,7 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
   const listingsRef = useRef<Listing[]>(listings);
   listingsRef.current = listings;
   const [outlineMsg, setOutlineMsg] = useState('');
+  const [outlineGeo, setOutlineGeo] = useState<{ rings: number[][][]; name: string } | null>(null);
 
   // "Show exact parcel" in a pin's popup: the pin is only the geocoder's best
   // point, so we ask the county parcel GIS for a parcel near that point whose
@@ -92,6 +94,7 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
 
         if (!best) {
           setOutlineMsg(`No ~${l.acreage} ac parcel found in county GIS near this pin — location stays approximate.`);
+          setOutlineGeo(null);
           return;
         }
         if (outlineLayer.current) map.removeLayer(outlineLayer.current);
@@ -101,6 +104,7 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
         ).addTo(map);
         map.fitBounds(outlineLayer.current.getBounds(), { maxZoom: 16, padding: [40, 40] });
         setOutlineMsg(`✓ Exact parcel boundary drawn (~${l.acreage} ac match from ${best.label}).`);
+        setOutlineGeo({ rings: best.f.geometry.rings, name: l.address || l.title || 'parcel' });
       } catch (err: any) {
         setOutlineMsg('Parcel lookup failed: ' + (err?.message || 'network error'));
       }
@@ -219,8 +223,16 @@ export default function AlertsMap({ listings }: { listings: Listing[] }) {
       </div>
       <div ref={mapEl} style={{ height: 380, borderRadius: 10, background: '#0B1416' }} />
       {outlineMsg && (
-        <div className="mono" style={{ fontSize: 11.5, color: outlineMsg.startsWith('✓') ? 'var(--lime)' : 'var(--muted)', marginTop: 8 }}>
-          {outlineMsg}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+          <span className="mono" style={{ fontSize: 11.5, color: outlineMsg.startsWith('✓') ? 'var(--lime)' : 'var(--muted)' }}>{outlineMsg}</span>
+          {outlineGeo && (
+            <>
+              <button className="btn" style={{ padding: '3px 10px', fontSize: 11.5 }}
+                onClick={() => { try { downloadDXF(outlineGeo.rings, outlineGeo.name); } catch {} }}>⬇ DXF (CAD)</button>
+              <button className="btn" style={{ padding: '3px 10px', fontSize: 11.5 }}
+                onClick={() => { downloadSHP(outlineGeo.rings, outlineGeo.name).catch(() => {}); }}>⬇ Shapefile</button>
+            </>
+          )}
         </div>
       )}
       {/* county chips — click as many as you want; All clears */}

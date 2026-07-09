@@ -28,7 +28,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const report = await runUtilityResearch(info);
+    const report = await runUtilityResearch(info, body.mode === 'full' ? 'full' : 'utilities');
     return Response.json({ report });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Utility research failed';

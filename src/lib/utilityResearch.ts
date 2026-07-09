@@ -38,24 +38,37 @@ function extractText(data: any): string | undefined {
   return pieces.join('\n').trim() || undefined;
 }
 
-export async function runUtilityResearch(info: ParcelInfo): Promise<string> {
+export async function runUtilityResearch(info: ParcelInfo, mode: 'utilities' | 'full' = 'utilities'): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     return [
-      'Utility research requested, but OPENAI_API_KEY is not configured in Railway yet.',
+      'Research requested, but OPENAI_API_KEY is not configured in Railway yet.',
       '',
-      'Next step: add OPENAI_API_KEY in Railway Variables, redeploy, then click Research utilities again.',
+      'Next step: add OPENAI_API_KEY in Railway Variables, redeploy, then click the button again.',
       `Parcel searched: ${compact(info.address || info.title)}, ${countyName(info.county)}`,
     ].join('\n');
   }
 
   const model = process.env.OPENAI_UTILITY_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-mini';
+  const focus = mode === 'full'
+    ? [
+      'You are a commercial land due-diligence assistant.',
+      'Research this parcel using web search and produce a due-diligence brief covering:',
+      '1. Zoning: current zoning designation, what it likely permits (residential density, commercial, agricultural), and the county/city planning department to confirm with.',
+      '2. Schools: the assigned public school district plus nearby elementary/middle/high schools.',
+      '3. Comps: recent (last ~3 years) comparable LAND sales nearby — similar acreage vacant/rural land, with price and $/acre where a public source shows it. If none found, say so plainly.',
+      '4. Utilities: one short paragraph on public water/sewer likelihood and the electric provider.',
+      'Never invent sale prices or zoning codes — only report what a source shows, with confidence levels and source links.',
+    ]
+    : [
+      'You are a commercial land due-diligence assistant.',
+      'Research public utility availability for this parcel using web search.',
+      'Focus on public sewer, public water, water/sewer service area, electric provider, gas provider, hydrants, nearby utility GIS, and county/city utility departments.',
+      'Do not invent exact pipe distances unless a public GIS source clearly shows it.',
+      'Return a practical report for a land acquisitions team with confidence levels and source links.',
+    ];
   const prompt = [
-    'You are a commercial land due-diligence assistant.',
-    'Research public utility availability for this parcel using web search.',
-    'Focus on public sewer, public water, water/sewer service area, electric provider, gas provider, hydrants, nearby utility GIS, and county/city utility departments.',
-    'Do not invent exact pipe distances unless a public GIS source clearly shows it.',
-    'Return a practical report for a land acquisitions team with confidence levels and source links.',
+    ...focus,
     '',
     'Parcel:',
     `Title: ${compact(info.title)}`,
@@ -71,12 +84,9 @@ export async function runUtilityResearch(info: ParcelInfo): Promise<string> {
     `Listing URL: ${compact(info.listingUrl)}`,
     '',
     'Format:',
-    '1. Utility summary',
-    '2. Public water evidence',
-    '3. Public sewer evidence',
-    '4. Electric / gas notes',
-    '5. What to verify by phone',
-    '6. Source links',
+    ...(mode === 'full'
+      ? ['1. Zoning', '2. Schools', '3. Comparable land sales', '4. Utilities snapshot', '5. What to verify by phone', '6. Source links']
+      : ['1. Utility summary', '2. Public water evidence', '3. Public sewer evidence', '4. Electric / gas notes', '5. What to verify by phone', '6. Source links']),
     'Keep it concise but useful.',
   ].join('\n');
 

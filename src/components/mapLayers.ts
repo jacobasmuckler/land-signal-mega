@@ -11,6 +11,10 @@ export const MAP_LAYERS = [
     url:'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/export' },
   { id:'topo', name:'Topography / contours', note:'USGS 3DEP', color:'#C7A867', type:'tile',
     url:'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}', opacity:.7 },
+  { id:'schools', name:'Schools (public K-12)', note:'NCES EDGE — hover a dot for the name', color:'#FF9DE2', type:'featureGroup',
+    sources:[
+      { url:'https://nces.ed.gov/opengis/rest/services/K12_School_Locations/EDGE_GEOCODE_PUBLICSCH_2324/MapServer/0/query', kind:'point', color:'#FF9DE2' },
+    ] },
   // Hydrant / water-main / sewer-main layers were removed: they only covered
   // 2-3 counties and looked broken everywhere else. Per-parcel utility answers
   // come from the ⚡ Research utilities button instead.
@@ -69,6 +73,10 @@ function arcgisFeatureOverlay(L: any, map: any, sources: any[]) {
         const layer = L.geoJSON({ type: 'FeatureCollection', features }, {
           pointToLayer: (_f: any, latlng: any) => L.circleMarker(latlng, { radius: 4, color: src.color || '#55E0FF', fillColor: src.color || '#55E0FF', fillOpacity: .9, weight: 1 }),
           style: () => ({ color: src.color || '#55E0FF', weight: 2.5, opacity: .85, fillOpacity: .12 }),
+          onEachFeature: (f: any, lyr: any) => {
+            const label = f.properties?.NAME || f.properties?.name || f.properties?.Name;
+            if (label) lyr.bindTooltip(String(label));
+          },
         });
         layer.addTo(group);
       } catch { /* county doesn't publish this layer here */ }
