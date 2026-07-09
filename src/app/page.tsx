@@ -65,6 +65,38 @@ export default function FinderPage() {
     function onUtility(e: any) { const p = resultsRef.current[e.detail]; if (p) research(p, 'utilities'); }
     function onFullReport(e: any) { const p = resultsRef.current[e.detail]; if (p) research(p, 'full'); }
 
+    // 📊 Market stats — census-tract housing numbers + AI sold-comps pass.
+    async function onMarket(e: any) {
+      const p = resultsRef.current[e.detail];
+      if (!p?.center) return;
+      const title = `Market — ${p.address || p.parcel || 'area'}`;
+      setUtilReport({ title, text: '', loading: true });
+      try {
+        const res = await fetch('/api/market-snapshot', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lat: p.center[0], lon: p.center[1], address: p.address ? `${p.address}, ${p.county || ''} ${p.state || 'NC'}` : undefined }),
+        });
+        const j = await res.json();
+        const money = (v: number | null) => v ? '$' + Math.round(v).toLocaleString() : 'n/a';
+        const lines: string[] = [];
+        if (j.stats) {
+          lines.push('**Census tract housing data** (' + (j.stats.areaName || 'this tract') + ')');
+          lines.push(`Median home value: ${money(j.stats.medianHomeValue)}`);
+          lines.push(`Median household income: ${money(j.stats.medianHouseholdIncome)}`);
+          if (j.stats.medianYearBuilt) lines.push(`Median year built: ${j.stats.medianYearBuilt}`);
+          if (j.stats.ownerOccupiedPct != null) lines.push(`Owner-occupied: ${j.stats.ownerOccupiedPct}%`);
+          if (j.stats.avgHouseholdSize) lines.push(`Avg household size: ${j.stats.avgHouseholdSize}`);
+        } else if (j.statsUnavailableReason) {
+          lines.push(`Census stats unavailable: ${j.statsUnavailableReason}`);
+        }
+        if (j.ai) { lines.push('', '**Recent sold market (web search)**', j.ai); }
+        else { lines.push('', 'Sold $/sqft lookup needs OPENAI_API_KEY (already set if utility research works).'); }
+        setUtilReport({ title, text: lines.join('\n'), loading: false });
+      } catch (err: any) {
+        setUtilReport({ title, text: 'Market lookup failed: ' + (err?.message || 'network error'), loading: false });
+      }
+    }
+
     // ⬇ DXF / Shapefile — export the parcel boundary for AutoCAD or GIS.
     async function onExport(e: any) {
       const p = resultsRef.current[e.detail?.idx];
@@ -98,12 +130,14 @@ export default function FinderPage() {
     }
     window.addEventListener('parcel-utility', onUtility);
     window.addEventListener('parcel-fullreport', onFullReport);
+    window.addEventListener('parcel-market', onMarket);
     window.addEventListener('parcel-export', onExport);
     window.addEventListener('parcel-similar', onSimilar);
     window.addEventListener('parcel-save', onSave);
     return () => {
       window.removeEventListener('parcel-utility', onUtility);
       window.removeEventListener('parcel-fullreport', onFullReport);
+      window.removeEventListener('parcel-market', onMarket);
       window.removeEventListener('parcel-export', onExport);
       window.removeEventListener('parcel-similar', onSimilar);
       window.removeEventListener('parcel-save', onSave);
@@ -229,6 +263,9 @@ export default function FinderPage() {
         <button onclick="window.dispatchEvent(new CustomEvent('parcel-similar',{detail:${p.idx}}))"
           style="padding:4px 9px;border-radius:7px;border:1px solid #9FE870;background:transparent;color:#9FE870;cursor:pointer;font-family:inherit;font-size:11.5px">
           ≈ Similar lots</button>
+        <button onclick="window.dispatchEvent(new CustomEvent('parcel-market',{detail:${p.idx}}))"
+          style="padding:4px 9px;border-radius:7px;border:1px solid #FFD166;background:transparent;color:#FFD166;cursor:pointer;font-family:inherit;font-size:11.5px">
+          📊 Market stats</button>
         <button onclick="window.dispatchEvent(new CustomEvent('parcel-export',{detail:{idx:${p.idx},fmt:'dxf'}}))"
           style="padding:4px 9px;border-radius:7px;border:1px solid #9FB4AF;background:transparent;color:#9FB4AF;cursor:pointer;font-family:inherit;font-size:11.5px">
           ⬇ DXF (CAD)</button>

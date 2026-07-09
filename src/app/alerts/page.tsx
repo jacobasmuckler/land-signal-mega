@@ -27,8 +27,23 @@ export default async function AlertsDashboard() {
   const scanRunning = !!newest && !newest.finishedAt
     && Date.now() - new Date(newest.startedAt).getTime() < 10 * 60 * 1000;
 
+  // The Railway cron should scan at least hourly — if nothing has run in 3+
+  // hours the scheduled scanner service is down/misconfigured. Surface that
+  // instead of letting the board silently go stale.
+  const hoursSinceLastScan = newest ? (Date.now() - new Date(newest.startedAt).getTime()) / 3600000 : Infinity;
+  const schedulerLooksDead = !scanRunning && hoursSinceLastScan > 3;
+
   return (
     <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+      {schedulerLooksDead && (
+        <div className="card p-4" style={{ borderColor: 'var(--amber)' }}>
+          <b style={{ color: 'var(--amber)' }}>⚠ Automatic scans have stopped.</b>
+          <span style={{ color: 'var(--muted)', marginLeft: 8, fontSize: 14 }}>
+            Last scan was {hoursSinceLastScan === Infinity ? 'never' : `${Math.floor(hoursSinceLastScan)}h ago`} — the scheduled scanner should run at least hourly.
+            Check Railway → <b>scheduled-scannerPRO</b>: is the latest deploy green, and is a Cron Schedule set under Settings (e.g. <span className="mono">*/15 * * * *</span>)?
+          </span>
+        </div>
+      )}
       {scanRunning && (
         <>
           {/* auto-refresh every 10s while a scan is in flight */}
