@@ -58,6 +58,10 @@ export default async function SavedPage() {
               )}
               <div className="mt-auto flex items-center gap-2 pt-1">
                 {listing.listingUrl && <a href={listing.listingUrl} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 13 }}>Open listing</a>}
+                <form action={`/api/listings/${listing.id}/utility-research`} method="post">
+                  <input type="hidden" name="redirectTo" value="/saved" />
+                  <button className="btn" style={{ padding: '6px 12px', fontSize: 13 }} type="submit">Research utilities</button>
+                </form>
                 <form action={`/api/listings/${listing.id}`} method="post">
                   <input type="hidden" name="action" value="review" />
                   <input type="hidden" name="redirectTo" value="/saved" />

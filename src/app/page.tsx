@@ -44,7 +44,7 @@ export default function FinderPage() {
   // exports, and comps all hang off these listeners.
   useEffect(() => {
     async function research(p: any, mode: 'utilities' | 'full') {
-      const title = `${p.acres != null ? p.acres.toFixed(1) + ' ac · ' : ''}${p.address || p.parcel || 'parcel'}`;
+      const title = `${mode === 'full' ? '📋' : '⚡'} ${p.acres != null ? p.acres.toFixed(1) + ' ac · ' : ''}${p.address || p.parcel || 'parcel'}`;
       setUtilReport({ title, text: '', loading: true });
       try {
         const res = await fetch('/api/parcels/utility-research', {
@@ -128,9 +128,31 @@ export default function FinderPage() {
       const btn = document.querySelector('.leaflet-popup-content button[data-save-parcel]') as HTMLButtonElement | null;
       saveParcel(p, btn || undefined);
     }
+    // 💰 Deal analysis — residual land valuation → max-offer range.
+    async function onDeal(e: any) {
+      const p = resultsRef.current[e.detail];
+      if (!p?.center || p.acres == null) return;
+      const title = `Deal analysis — ${p.acres.toFixed(1)} ac · ${p.address || p.parcel || 'parcel'}`;
+      setUtilReport({ title, text: '', loading: true });
+      try {
+        const res = await fetch('/api/parcels/deal-analysis', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lat: p.center[0], lon: p.center[1], acres: p.acres,
+            address: p.address, county: p.county, state: p.state, zoning: p.zoning, owner: p.owner,
+          }),
+        });
+        const j = await res.json();
+        setUtilReport({ title, text: j.report || j.error || 'No analysis returned.', loading: false });
+      } catch (err: any) {
+        setUtilReport({ title, text: 'Deal analysis failed: ' + (err?.message || 'network error'), loading: false });
+      }
+    }
+
     window.addEventListener('parcel-utility', onUtility);
     window.addEventListener('parcel-fullreport', onFullReport);
     window.addEventListener('parcel-market', onMarket);
+    window.addEventListener('parcel-deal', onDeal);
     window.addEventListener('parcel-export', onExport);
     window.addEventListener('parcel-similar', onSimilar);
     window.addEventListener('parcel-save', onSave);
@@ -138,6 +160,7 @@ export default function FinderPage() {
       window.removeEventListener('parcel-utility', onUtility);
       window.removeEventListener('parcel-fullreport', onFullReport);
       window.removeEventListener('parcel-market', onMarket);
+      window.removeEventListener('parcel-deal', onDeal);
       window.removeEventListener('parcel-export', onExport);
       window.removeEventListener('parcel-similar', onSimilar);
       window.removeEventListener('parcel-save', onSave);
@@ -266,6 +289,9 @@ export default function FinderPage() {
         <button onclick="window.dispatchEvent(new CustomEvent('parcel-market',{detail:${p.idx}}))"
           style="padding:4px 9px;border-radius:7px;border:1px solid #FFD166;background:transparent;color:#FFD166;cursor:pointer;font-family:inherit;font-size:11.5px">
           📊 Market stats</button>
+        <button onclick="window.dispatchEvent(new CustomEvent('parcel-deal',{detail:${p.idx}}))"
+          style="padding:4px 9px;border-radius:7px;border:1px solid #6EE7B7;background:transparent;color:#6EE7B7;cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:600">
+          💰 Deal analysis</button>
         <button onclick="window.dispatchEvent(new CustomEvent('parcel-export',{detail:{idx:${p.idx},fmt:'dxf'}}))"
           style="padding:4px 9px;border-radius:7px;border:1px solid #9FB4AF;background:transparent;color:#9FB4AF;cursor:pointer;font-family:inherit;font-size:11.5px">
           ⬇ DXF (CAD)</button>
@@ -443,7 +469,7 @@ export default function FinderPage() {
           <div style={{ position:'absolute', top:14, left:14, width:410, maxWidth:'48%', maxHeight:'calc(100% - 28px)', overflowY:'auto', zIndex:950,
             background:'var(--ink2)', border:'1px solid var(--cyan)', borderRadius:12, padding:14 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8, marginBottom:8 }}>
-              <b style={{ fontSize:13 }}>⚡ Utilities — {utilReport.title}</b>
+              <b style={{ fontSize:13 }}>{utilReport.title}</b>
               <button onClick={()=>setUtilReport(null)} className="btn" style={{ padding:'2px 9px', fontSize:12, flex:'none' }}>✕</button>
             </div>
             {utilReport.loading
