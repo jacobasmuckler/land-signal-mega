@@ -30,14 +30,13 @@
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "scripts/scan.ts",
     ".next/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
-    "scripts/test-*.ts",
-    "scripts/self-test.ts",
     "mega"
   ]
 }
