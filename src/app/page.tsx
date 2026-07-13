@@ -230,8 +230,10 @@ export default function FinderPage() {
   function srcAcre(s:any,a:number){ if(s.acreageUnit==='sqft')return a*43560; if(s.acreageUnit==='sqm')return a/0.00024710538146717; return a; }
   function normAcre(s:any,v:any){ const r=Number(v); if(r==null||isNaN(r))return null; if(s.acreageUnit==='sqft')return r/43560; if(s.acreageUnit==='sqm')return r*0.00024710538146717; return r; }
   function bbox(lon:number,lat:number,mi:number){ const la=mi/69,co=Math.cos(lat*Math.PI/180)||1e-6,lo=mi/(69*co); return {xmin:lon-lo,ymin:lat-la,xmax:lon+lo,ymax:lat+la}; }
-  function ringArea(r:any[]){ const R=6378137; let a=0; for(let i=0;i<r.length;i++){const[x1,y1]=r[i],[x2,y2]=r[(i+1)%r.length]; a+=(x2-x1)*Math.PI/180*(2+Math.sin(y1*Math.PI/180)+Math.sin(y2*Math.PI/180));} return Math.abs(a*R*R/2); }
-  function polyAcres(rings:any[]){ if(!rings||!rings.length)return null; return ringArea(rings[0])/4046.8564224; }
+  function ringAreaSigned(r:any[]){ const R=6378137; let a=0; for(let i=0;i<r.length;i++){const[x1,y1]=r[i],[x2,y2]=r[(i+1)%r.length]; a+=(x2-x1)*Math.PI/180*(2+Math.sin(y1*Math.PI/180)+Math.sin(y2*Math.PI/180));} return a*R*R/2; }
+  // Sum signed ring areas: multi-part parcels add up, holes subtract.
+  function polyAcres(rings:any[]){ if(!rings||!rings.length)return null; let a=0; for(const r of rings)a+=ringAreaSigned(r); return Math.abs(a)/4046.8564224; }
+  function geomAreaPerAcre(s:any){ return s.geomAreaUnit==='sqm'?4046.8564224:43560; }
   function hav(la1:number,lo1:number,la2:number,lo2:number){ const R=3958.8,dLa=(la2-la1)*Math.PI/180,dLo=(lo2-lo1)*Math.PI/180,a=Math.sin(dLa/2)**2+Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLo/2)**2; return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)); }
   function centroid(rings:any[]){ const r=rings[0]; let x=0,y=0; for(const[lo,la]of r){x+=lo;y+=la;} return [y/r.length,x/r.length]; }
   function normPlace(v:any){ return String(v||'').toLowerCase().replace(/\b(county|parish|borough|census area|municipality|city and borough)\b/g,'').replace(/[^a-z0-9]+/g,' ').trim(); }
@@ -291,7 +293,12 @@ export default function FinderPage() {
   }
   function buildUrl(s:any,lon:number,lat:number,mi:number,minA:number,maxA:number|null,opt:any={}){
     const base=s.serviceUrl.replace(/\/$/,'')+'/'+s.layerId+'/query',p=new URLSearchParams(),w:string[]=[];
-    if(s.acreageField&&!s.acreageIsCalculated){ if(minA>0)w.push(`${s.acreageField} >= ${srcAcre(s,minA)}`); if(maxA!=null)w.push(`${s.acreageField} <= ${srcAcre(s,maxA)}`); }
+    // Prefer the service-computed geometry area for filtering: attribute acreage
+    // fields can mix units per county (NC's gisacres is sq ft in Cabarrus), which
+    // both floods the fetch with tiny lots and drops legit parcels. Loose margins
+    // here — the client re-filters exactly after unit correction.
+    if(s.geomAreaField){ const per=geomAreaPerAcre(s); if(minA>0)w.push(`${s.geomAreaField} >= ${Math.floor(minA*per*0.9)}`); if(maxA!=null)w.push(`${s.geomAreaField} <= ${Math.ceil(maxA*per*1.15)}`); }
+    else if(s.acreageField&&!s.acreageIsCalculated){ if(minA>0)w.push(`${s.acreageField} >= ${srcAcre(s,minA)}`); if(maxA!=null)w.push(`${s.acreageField} <= ${srcAcre(s,maxA)}`); }
     p.set('where',w.length?w.join(' AND '):'1=1');
     if(opt.bounds||s.spatialMode==='envelope'){ const b=opt.bounds||bbox(lon,lat,mi); p.set('geometry',`${b.xmin},${b.ymin},${b.xmax},${b.ymax}`); p.set('geometryType','esriGeometryEnvelope'); p.set('inSR','4326'); }
     else { p.set('geometry',`${lon},${lat}`); p.set('geometryType','esriGeometryPoint'); p.set('inSR','4326'); p.set('distance',String(mi*MILES_TO_M)); p.set('units','esriSRUnit_Meter'); }
@@ -304,7 +311,17 @@ export default function FinderPage() {
     const a=f.attributes||{}, g=f.geometry&&f.geometry.rings?{type:'Polygon',coordinates:f.geometry.rings}:null;
     if(!g)return null;
     let ac=s.acreageField?normAcre(s,fieldValue(a,s.acreageField)):null;
-    if((ac==null||isNaN(ac)||ac===0)&&(s.acreageIsCalculated!==false||s.calculateAcreageIfMissing)){const cc=polyAcres(g.coordinates);if(cc!=null)ac=cc;}
+    // The service-computed area field (when configured) beats our spherical
+    // approximation of the returned rings — use it as the geometry truth.
+    let geometryAcres=polyAcres(g.coordinates);
+    if(s.geomAreaField){ const ga=Number(fieldValue(a,s.geomAreaField)); if(Number.isFinite(ga)&&ga>0)geometryAcres=ga/geomAreaPerAcre(s); }
+    if(geometryAcres!=null){
+      // Public assessor fields occasionally mix acres and square feet in the
+      // same column. Trust the boundary when the attribute is wildly different
+      // so a 93,866 sq-ft residential lot never appears as 93,866 acres.
+      const ratio=ac!=null&&geometryAcres>0?ac/geometryAcres:null;
+      if(ac==null||isNaN(ac)||ac===0||(ratio!=null&&(ratio>50||ratio<0.02)))ac=geometryAcres;
+    }
     const [clat,clon]=centroid(g.coordinates);
     return { __id:`${sourceKey(s)}|${fieldValue(a,s.idField)??fieldValue(a,'OBJECTID')??Math.random()}`, acres:ac!=null&&!isNaN(ac)?ac:null,
       owner:fieldValue(a,s.ownerField)??null, address:fieldValue(a,s.addressField)??null, parcel:fieldValue(a,s.parcelField)??null,
@@ -425,6 +442,7 @@ export default function FinderPage() {
       const sources=srcForAreas(areas);
       if(!sources.length){ setStatusMsg(`Found ${geo.label.split(',')[0]}, but no free parcel source covers ${geo.county||geo.state||'that area'} yet. NC is statewide; in SC, York & Greenville are wired — Lancaster, Chester & Spartanburg need a source added.`); setBusy(false); return; }
       const uncovered=areas.filter((area:any)=>!srcForLoc(area).length);
+      const uncoveredLabel=uncovered.slice(0,4).map((area:any)=>`${area.county} ${area.stateAbbr||''}`.trim()).join(', ');
       setStatusMsg(`Searching ${sources.length} source(s) across ${areas.length||1} count${areas.length===1?'y':'ies'} near ${geo.label.split(',')[0]}…`);
       const all:any[]=[], warn:string[]=[];
       for(const s of sources){
@@ -444,7 +462,7 @@ export default function FinderPage() {
       if(deduped.length){ try{ map.fitBounds(L.featureGroup([pl,circle.current]).getBounds(),{padding:[40,40]}); }catch{}
         setStatusMsg(isAddress
           ? `Found ${deduped.length===1?'the parcel':deduped.length+' parcels'} at that address — click it on the map for details, save, and exports.`
-          : `Found ${deduped.length} unique parcel(s) ≥ ${minA} ac within ${mi} mi across ${areas.length||1} count${areas.length===1?'y':'ies'}.${uncovered.length?` ${uncovered.length} touched count${uncovered.length===1?'y has':'ies have'} no connected parcel source.`:''}${warn.length?' Some sources had issues.':''}`); }
+          : `Found ${deduped.length} unique parcel(s) ≥ ${minA} ac within ${mi} mi across ${areas.length||1} count${areas.length===1?'y':'ies'}.${uncovered.length?` No connected parcel source for ${uncoveredLabel}${uncovered.length>4?` and ${uncovered.length-4} more`:''}.`:''}${warn.length?' Some sources had issues.':''}`); }
       else setStatusMsg(isAddress?`Geocoded the address, but no parcel layer covers that exact point. Try the county name instead.`:`No parcels matched. Try a larger radius or lower minimum acreage.`);
     }catch(e:any){ setStatusMsg('Search failed: '+e.message); }
     finally{ setBusy(false); }

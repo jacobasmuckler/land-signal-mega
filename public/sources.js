@@ -9,6 +9,10 @@
  *   layerId            Parcel polygon layer id
  *   acreageField       Field holding acreage, or null if it must be computed from geometry
  *   acreageIsCalculated true -> no acreage field; area is computed from the polygon
+ *   geomAreaField      Optional service-computed geometry-area field (e.g. Shape__Area).
+ *                      When set, server-side acreage filters use it instead of acreageField —
+ *                      use it when acreageField units are inconsistent across counties.
+ *   geomAreaUnit       Units of geomAreaField: "sqft" (default) or "sqm"
  *   ownerField, addressField, parcelField, idField   Attribute names (or null)
  *   maxRecordCount     Server page size
  *   corsEnabled        "yes" -> works in any browser; "unknown"/"no" -> may need server.py
@@ -306,9 +310,10 @@ window.SOURCES = [
     state: "North Carolina", stateAbbr: "NC", label: "North Carolina (statewide)", coverage: "statewide",
     serviceUrl: "https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/FeatureServer", layerId: 1,
     acreageField: "gisacres", acreageIsCalculated: false,
+    geomAreaField: "Shape__Area", geomAreaUnit: "sqft",
     ownerField: "ownname", addressField: "siteadd", parcelField: "parno", countyField: "cntyname", idField: "OBJECTID",
     maxRecordCount: 5000, corsEnabled: "yes",
-    note: "'/secure/' is just a folder name; no token required. ~5.9M parcels, all 100 counties.",
+    note: "'/secure/' is just a folder name; no token required. ~5.9M parcels, all 100 counties. gisacres units vary by county (Cabarrus submits sq ft), so acreage filters run against Shape__Area (sq ft, consistent statewide).",
   },
   {
     state: "North Dakota", stateAbbr: "ND", label: "North Dakota (statewide)", coverage: "statewide",
@@ -501,10 +506,10 @@ window.SOURCES = [
   {
     state: "South Carolina", stateAbbr: "SC", label: "South Carolina — York County (Rock Hill)", coverage: "county-only", counties: ["York"],
     serviceUrl: "https://services1.arcgis.com/2AGLxyiJoNiVHKwq/arcgis/rest/services/Parcels/FeatureServer", layerId: 0,
-    acreageField: "deededacres", acreageIsCalculated: false,
+    acreageField: "Assessed_Area", acreageIsCalculated: false,
     ownerField: "Owner1", addressField: "PropertyAddress", parcelField: null, idField: "OBJECTID",
     maxRecordCount: 2000, corsEnabled: "yes",
-    note: "York County only (does NOT cover Columbia/Charleston).",
+    note: "York County only. Assessed_Area is the consistent acres field; deededacres contains mixed acres/square-foot values.",
   },
   {
     state: "South Carolina", stateAbbr: "SC", label: "South Carolina — Greenville County", coverage: "county-only", counties: ["Greenville"],

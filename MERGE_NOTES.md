@@ -22,6 +22,16 @@ Same service type as your current scanner. Needs: a Postgres plugin (DATABASE_UR
 and the same GMAIL_*, SMTP_*, ALERT_TO_EMAIL, TEAM_USERNAME, TEAM_PASSWORD vars you already use.
 `npm start` runs `prisma migrate deploy && next start`.
 
+## Fix 2026-07-13: NC radius search missing counties + bogus sidebar acreage
+NC OneMap's `gisacres` field mixes units by county — Cabarrus submits **square feet**
+(a 300-acre parcel reads 13,067,972). Two symptoms: sidebar showed million-acre parcels,
+and the `gisacres >= minAcres` server filter meant "20 sq ft" in Cabarrus, flooding the
+fetch with every tiny lot until the 25k cap hit and remaining map tiles (whole counties)
+were skipped. Fix: NC now filters server-side on `Shape__Area` (sq ft, computed by the
+service, consistent statewide — new `geomAreaField`/`geomAreaUnit` source options), and
+`normalize()` trusts that field over per-county attributes. Also fixed `polyAcres` to sum
+all rings (multi-part parcels/holes) instead of only the first ring.
+
 ## Known coverage gap (unchanged from before)
 NC parcels are statewide; in SC, York + Greenville are wired. Lancaster, Chester, Spartanburg
 need a GIS source added to `public/sources.js` later.
