@@ -59,3 +59,12 @@ model ScanLog {
   alertsSent      Int @default(0)
   notes           String?
 }
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         String   @default("member")
+  createdAt    DateTime @default(now())
+}

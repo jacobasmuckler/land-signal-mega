@@ -1,35 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { SESSION_COOKIE, verifySessionToken } from '@/lib/session';
 
-function unauthorized(message = 'Authentication required') {
-  return new NextResponse(message, {
-    status: 401,
-    headers: { 'WWW-Authenticate': 'Basic realm="Charlotte Land Scanner"' },
-  });
-}
+// Session-cookie auth: everyone gets their own account (Microsoft SSO or
+// email+password). Unauthenticated visitors are sent to the login page.
+// Note: /api/auth/gmail/* is intentionally NOT public — connecting the inbox
+// requires being signed in. Only the login/SSO endpoints are open.
+const PUBLIC_PREFIXES = ['/login', '/api/auth/login', '/api/auth/register', '/api/auth/logout', '/api/auth/microsoft', '/_next', '/favicon', '/sources.js'];
 
-export function middleware(request: NextRequest) {
-  const expectedUser = process.env.TEAM_USERNAME;
-  const expectedPassword = process.env.TEAM_PASSWORD;
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  if (PUBLIC_PREFIXES.some(p => pathname.startsWith(p))) return NextResponse.next();
 
-  if (!expectedUser || !expectedPassword) {
-    if (process.env.NODE_ENV === 'development') return NextResponse.next();
-    return new NextResponse('TEAM_USERNAME and TEAM_PASSWORD must be configured.', { status: 503 });
+  const session = await verifySessionToken(request.cookies.get(SESSION_COOKIE)?.value);
+  if (session) return NextResponse.next();
+
+  // Legacy fallback: the old shared TEAM_USERNAME/TEAM_PASSWORD basic auth
+  // still works so existing bookmarks and tools don't break.
+  const auth = request.headers.get('authorization');
+  if (auth?.startsWith('Basic ') && process.env.TEAM_USERNAME && process.env.TEAM_PASSWORD) {
+    try {
+      const decoded = atob(auth.slice(6));
+      const sep = decoded.indexOf(':');
+      if (decoded.slice(0, sep) === process.env.TEAM_USERNAME && decoded.slice(sep + 1) === process.env.TEAM_PASSWORD) {
+        return NextResponse.next();
+      }
+    } catch { /* fall through to login redirect */ }
   }
 
-  const authorization = request.headers.get('authorization');
-  if (!authorization?.startsWith('Basic ')) return unauthorized();
-
-  try {
-    const decoded = atob(authorization.slice(6));
-    const separator = decoded.indexOf(':');
-    if (separator < 0) return unauthorized();
-    const username = decoded.slice(0, separator);
-    const password = decoded.slice(separator + 1);
-    if (username !== expectedUser || password !== expectedPassword) return unauthorized('Invalid credentials');
-    return NextResponse.next();
-  } catch {
-    return unauthorized('Invalid credentials');
-  }
+  if (pathname.startsWith('/api/')) return new NextResponse('Sign in required', { status: 401 });
+  const login = request.nextUrl.clone();
+  login.pathname = '/login';
+  login.search = '';
+  return NextResponse.redirect(login);
 }
 
 export const config = {
