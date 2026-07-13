@@ -11,8 +11,10 @@ export const MAP_LAYERS = [
     url:'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/export' },
   { id:'topo', name:'Topography / contours', note:'USGS 3DEP', color:'#C7A867', type:'tile',
     url:'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}', opacity:.7 },
-  { id:'zoning', name:'Zoning districts', note:'City of Charlotte PLN — zoom in to see colors; other counties coming', color:'#E8B04B', type:'esri',
-    url:'https://gis.charlottenc.gov/arcgis/rest/services/PLN/Zoning/MapServer/export' },
+  // Zoning was tried as a map overlay but the source layer draws boundary
+  // outlines only (no category fill) — at any normal zoom, thousands of them
+  // merge into a solid-looking blob instead of a useful legend. Zoning is
+  // answered per-parcel instead via the "Zoning · schools · comps" button.
   { id:'schools', name:'Schools (public K-12)', note:'NCES EDGE — hover a dot for the name', color:'#FF9DE2', type:'featureGroup',
     sources:[
       { url:'https://nces.ed.gov/opengis/rest/services/K12_School_Locations/EDGE_GEOCODE_PUBLICSCH_2324/MapServer/0/query', kind:'point', color:'#FF9DE2' },
