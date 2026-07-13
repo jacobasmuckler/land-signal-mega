@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { createSessionToken, SESSION_COOKIE } from '@/lib/session';
+import { publicOrigin } from '@/lib/publicOrigin';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +19,9 @@ export async function GET(request: Request) {
   if (!code) return fail(url.searchParams.get('error_description') || 'Microsoft sign-in was cancelled.');
   if (!state || state !== cookieState) return fail('Sign-in session expired — try again.');
 
+  // Must exactly match the redirect_uri sent in the /start authorize request
+  // (Microsoft rejects the token exchange otherwise) — same publicOrigin() call.
+  const origin = publicOrigin(request);
   const tenant = process.env.MS_TENANT_ID || 'organizations';
   const tokenRes = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
     method: 'POST',
@@ -27,7 +31,7 @@ export async function GET(request: Request) {
       client_secret: process.env.MS_CLIENT_SECRET || '',
       code,
       grant_type: 'authorization_code',
-      redirect_uri: `${url.origin}/api/auth/microsoft/callback`,
+      redirect_uri: `${origin}/api/auth/microsoft/callback`,
     }),
     signal: AbortSignal.timeout(15_000),
   });

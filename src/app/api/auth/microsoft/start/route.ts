@@ -1,3 +1,5 @@
+import { publicOrigin } from '@/lib/publicOrigin';
+
 export const dynamic = 'force-dynamic';
 
 // Kick off Microsoft Entra ID (Azure AD) sign-in. Needs MS_CLIENT_ID,
@@ -11,7 +13,7 @@ export async function GET(request: Request) {
   const tenant = process.env.MS_TENANT_ID || 'organizations';
   if (!clientId) return new Response('Microsoft sign-in not configured (MS_CLIENT_ID missing).', { status: 503 });
 
-  const origin = new URL(request.url).origin;
+  const origin = publicOrigin(request);
   const state = crypto.randomUUID();
   const params = new URLSearchParams({
     client_id: clientId,
