@@ -49,10 +49,14 @@ export default function FinderPage() {
   const [compNewOnly, setCompNewOnly] = useState(false);
   const [compCriteria, setCompCriteria] = useState('');
   const [compArea, setCompArea] = useState<[number, number][] | null>(null);
+  // The finder can also search inside a drawn polygon instead of city+radius.
+  const [searchArea, setSearchArea] = useState<[number, number][] | null>(null);
+  const searchAreaLayer = useRef<any>(null);
   const [drawing, setDrawing] = useState(false);
+  const [drawTarget, setDrawTarget] = useState<'comp' | 'search'>('comp');
   const [drawCount, setDrawCount] = useState(0);
   const compAreaLayer = useRef<any>(null);
-  const drawRef = useRef<{ active: boolean; pts: [number, number][]; layer: any }>({ active: false, pts: [], layer: null });
+  const drawRef = useRef<{ active: boolean; target: 'comp' | 'search'; pts: [number, number][]; layer: any }>({ active: false, target: 'comp', pts: [], layer: null });
   const compScopeRef = useRef<any>(null);
   compScopeRef.current = { radiusMiles: compRadius, polygon: compArea, newOnly: compNewOnly, criteria: compCriteria };
   function scopeSummary() {
@@ -60,26 +64,33 @@ export default function FinderPage() {
     return `${s.polygon ? 'your drawn area' : `within ${s.radiusMiles} mi`}${s.newOnly ? ' · new builds only' : ''}${s.criteria ? ` · ${s.criteria}` : ''}`;
   }
 
+  // One draw engine, two targets: 'comp' (magenta, comps/market data area) and
+  // 'search' (cyan, the finder's own search boundary).
+  const DRAW_STYLE: Record<'comp' | 'search', any> = {
+    comp:   { color: '#FF7BD5', weight: 2, dashArray: '6 5', fillColor: '#FF7BD5', fillOpacity: .05, interactive: false },
+    search: { color: '#6FD6E0', weight: 2, dashArray: '9 6', fillColor: '#6FD6E0', fillOpacity: .04, interactive: false },
+  };
   function redrawTempArea() {
     const L = window.L, map = mapRef.current, d = drawRef.current;
     if (!map || !window.L) return;
     if (d.layer) { map.removeLayer(d.layer); d.layer = null; }
     if (d.pts.length) {
-      d.layer = (d.pts.length >= 3 ? L.polygon : L.polyline)(d.pts, { color: '#FF7BD5', weight: 2, dashArray: '6 5', fillColor: '#FF7BD5', fillOpacity: .05, interactive: false }).addTo(map);
+      d.layer = (d.pts.length >= 3 ? L.polygon : L.polyline)(d.pts, DRAW_STYLE[d.target]).addTo(map);
     }
   }
-  function startDraw() {
+  function startDraw(target: 'comp' | 'search') {
     const map = mapRef.current; if (!map) return;
-    clearCompArea();
-    drawRef.current = { active: true, pts: [], layer: null };
+    if (drawRef.current.active) cancelDraw();
+    if (target === 'comp') clearCompArea(); else clearSearchArea();
+    drawRef.current = { active: true, target, pts: [], layer: null };
     map.doubleClickZoom.disable();
     map.getContainer().style.cursor = 'crosshair';
-    setDrawing(true); setDrawCount(0);
+    setDrawTarget(target); setDrawing(true); setDrawCount(0);
   }
   function cancelDraw() {
     const map = mapRef.current, d = drawRef.current;
     if (d.layer && map) map.removeLayer(d.layer);
-    drawRef.current = { active: false, pts: [], layer: null };
+    drawRef.current = { active: false, target: d.target, pts: [], layer: null };
     if (map) { map.doubleClickZoom.enable(); map.getContainer().style.cursor = ''; }
     setDrawing(false); setDrawCount(0);
   }
@@ -90,16 +101,25 @@ export default function FinderPage() {
     const pts = d.pts.filter((p, i, arr) => i === 0 || Math.abs(p[0] - arr[i - 1][0]) > 1e-7 || Math.abs(p[1] - arr[i - 1][1]) > 1e-7);
     if (pts.length < 3) { cancelDraw(); return; }
     if (d.layer) map.removeLayer(d.layer);
-    drawRef.current = { active: false, pts: [], layer: null };
+    const target = d.target;
+    drawRef.current = { active: false, target, pts: [], layer: null };
     map.doubleClickZoom.enable(); map.getContainer().style.cursor = '';
-    compAreaLayer.current = L.polygon(pts, { color: '#FF7BD5', weight: 2, dashArray: '6 5', fillColor: '#FF7BD5', fillOpacity: .05, interactive: false }).addTo(map);
-    setCompArea(pts); setDrawing(false); setDrawCount(0);
+    const layer = L.polygon(pts, DRAW_STYLE[target]).addTo(map);
+    if (target === 'comp') { compAreaLayer.current = layer; setCompArea(pts); }
+    else { searchAreaLayer.current = layer; setSearchArea(pts); }
+    setDrawing(false); setDrawCount(0);
   }
   function clearCompArea() {
     const map = mapRef.current;
     if (compAreaLayer.current && map) map.removeLayer(compAreaLayer.current);
     compAreaLayer.current = null;
     setCompArea(null);
+  }
+  function clearSearchArea() {
+    const map = mapRef.current;
+    if (searchAreaLayer.current && map) map.removeLayer(searchAreaLayer.current);
+    searchAreaLayer.current = null;
+    setSearchArea(null);
   }
   const drawFns = useRef<any>({});
   drawFns.current = { redrawTempArea, finishDraw };
@@ -310,6 +330,48 @@ export default function FinderPage() {
   function geomAreaPerAcre(s:any){ return s.geomAreaUnit==='sqm'?4046.8564224:43560; }
   function hav(la1:number,lo1:number,la2:number,lo2:number){ const R=3958.8,dLa=(la2-la1)*Math.PI/180,dLo=(lo2-lo1)*Math.PI/180,a=Math.sin(dLa/2)**2+Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLo/2)**2; return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)); }
   function centroid(rings:any[]){ const r=rings[0]; let x=0,y=0; for(const[lo,la]of r){x+=lo;y+=la;} return [y/r.length,x/r.length]; }
+  // ── drawn-search-area helpers (vertices are [lat, lon]) ──
+  function pointInPoly(pt:[number,number],poly:[number,number][]){ const y=pt[0],x=pt[1]; let inside=false; for(let i=0,j=poly.length-1;i<poly.length;j=i++){ const yi=poly[i][0],xi=poly[i][1],yj=poly[j][0],xj=poly[j][1]; if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))inside=!inside; } return inside; }
+  function polyBBox(poly:[number,number][]){ return { xmin:Math.min(...poly.map(p=>p[1])), xmax:Math.max(...poly.map(p=>p[1])), ymin:Math.min(...poly.map(p=>p[0])), ymax:Math.max(...poly.map(p=>p[0])) }; }
+  function polyCenter(poly:[number,number][]){ let la=0,lo=0; for(const p of poly){la+=p[0];lo+=p[1];} return [la/poly.length,lo/poly.length] as [number,number]; }
+  function polyReachMi(poly:[number,number][]){ const c=polyCenter(poly); return Math.max(0.5,...poly.map(p=>hav(c[0],c[1],p[0],p[1]))); }
+  async function reverseGeo(lat:number,lon:number){
+    try{
+      const r=await fetchJson(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+      return { lat, lon, state:r.address?.state||null, county:r.address?.county||null, label:r.display_name||'your drawn area' };
+    }catch{ return { lat, lon, state:null, county:null, label:'your drawn area' }; }
+  }
+
+  // ── candidate scoring: rank parcels by how promising they are to acquire,
+  // not by raw size. Owners like counties/churches/utilities are pushed to the
+  // bottom; size-fit, compact buildable shape, closeness, motivated-seller
+  // signals, road access and res/ag zoning score points. Reasons are shown as
+  // chips on each card so the ranking is never a black box. ──
+  function perimeterMeters(rings:any[]){ const r=rings?.[0]; if(!r||r.length<3)return null; let m=0; for(let i=0;i<r.length;i++){const[lo1,la1]=r[i],[lo2,la2]=r[(i+1)%r.length]; m+=hav(la1,lo1,la2,lo2)*MILES_TO_M;} return m; }
+  function candidateInfo(p:any,ctx:{minA:number,maxA:number|null,mi:number}){
+    const owner=String(p.owner||'').toUpperCase();
+    if(/(\bCOUNTY\b|CITY OF|TOWN OF|STATE OF|UNITED STATES|\bUSA\b|CHURCH|MINISTR|SCHOOL|BOARD OF|AUTHORITY|COMMISSION|DEPARTMENT|\bDEPT\b|CEMETERY|\bHOA\b|HOMEOWNERS|ASSOCIATION|\bASSN\b|RAILROAD|RAILWAY|DUKE ENERGY|ELECTRIC MEMBERSHIP|\bPOWER CO\b|PIPELINE|CONSERVANCY|LAND TRUST|NATURE|AIRPORT|\bFIRE\b)/.test(owner))
+      return { score:-1, why:['public/institutional owner'] };
+    if(p.acres==null) return { score:0, why:['acreage unknown'] };
+    const why:string[]=[]; let s=0;
+    // Size fit: full points inside [min, ideal-high]; oversize tapers off.
+    const idealHi=ctx.maxA??Math.max(ctx.minA*5,80);
+    if(p.acres<=idealHi){ s+=30; why.push('size fits target'); }
+    else { s+=Math.max(4,30-10*Math.log2(p.acres/idealHi)); why.push('larger than target'); }
+    // Closer to the search center is better.
+    if(p.distance!=null&&ctx.mi>0){ s+=Math.round(16*Math.max(0,1-p.distance/ctx.mi)); if(p.distance<=ctx.mi*0.4)why.push('close in'); }
+    // Shape: Polsby-Popper compactness — slivers grade terribly, squares well.
+    const per=perimeterMeters(p.geojson?.coordinates);
+    if(per&&per>0){ const pp=4*Math.PI*(p.acres*4046.8564)/(per*per);
+      if(pp>=0.35){ s+=18; why.push('compact shape'); } else if(pp>=0.18){ s+=9; } else { s-=6; why.push('long/irregular shape'); } }
+    // Owner signals.
+    if(/(ESTATE|HEIRS|\bADMIN\b|ADMINISTRATOR|EXECUTOR|EXECUTRIX)/.test(owner)){ s+=12; why.push('estate/heirs owner'); }
+    else if(owner&&!/(LLC|L L C|\bINC\b|\bCORP\b|PROPERTIES|HOLDINGS|DEVELOPMENT|PARTNERS|CAPITAL|INVESTMENTS|VENTURES|BUILDERS|HOMES\b)/.test(owner)){ s+=8; why.push('individual/family owner'); }
+    if(p.address){ s+=6; why.push('has road address'); }
+    const z=String(p.zoning||'').toUpperCase();
+    if(z&&/^(R\b|R-|R1|R2|R3|R4|RA|RR|RE\b|RES|AG|A-|A1|AR|RU)/.test(z)){ s+=10; why.push(`res/ag zoning`); }
+    return { score:s, why };
+  }
   function normPlace(v:any){ return String(v||'').toLowerCase().replace(/\b(county|parish|borough|census area|municipality|city and borough)\b/g,'').replace(/[^a-z0-9]+/g,' ').trim(); }
   function srcForState(st:string){ if(!st)return[]; const n=st.trim().toLowerCase(); return (window.SOURCES||[]).filter((s:any)=>s.state.toLowerCase()===n); }
   function srcMatch(s:any,geo:any){ if(!s||!geo)return false; if(s.coverage==='statewide'||s.coverage==='near-statewide'){return !(s.excludedCounties||[]).map(normPlace).includes(normPlace(geo.county));} const cs=(s.counties||s.countyNames||[]).map(normPlace); if(cs.length)return cs.includes(normPlace(geo.county)); return s.coverage!=='county-only'; }
@@ -409,9 +471,11 @@ export default function FinderPage() {
     return cells;
   }
   function featureId(f:any,s:any){ const a=f.attributes||{}; return String(fieldValue(a,s.idField)??fieldValue(a,'OBJECTID')??JSON.stringify(f.geometry?.rings?.[0]?.slice(0,2)||[])); }
-  async function querySource(s:any,geo:any,mi:number,minA:number,maxA:number|null){
+  // areaBounds: when the user drew a search polygon, query its bounding box
+  // (envelope) instead of point+radius; the caller filters to the exact shape.
+  async function querySource(s:any,geo:any,mi:number,minA:number,maxA:number|null,areaBounds?:any){
     let total:number|null=null;
-    try{ const cr=await fetchJson(buildUrl(s,geo.lon,geo.lat,mi,minA,maxA,{countOnly:true})); total=typeof cr.count==='number'?cr.count:null; }catch{}
+    try{ const cr=await fetchJson(buildUrl(s,geo.lon,geo.lat,mi,minA,maxA,{countOnly:true,bounds:areaBounds})); total=typeof cr.count==='number'?cr.count:null; }catch{}
     const ps=Math.min(s.maxRecordCount||1000,1000),unique=new Map<string,any>();
     let truncated=false;
 
@@ -435,8 +499,8 @@ export default function FinderPage() {
 
     if(total!=null&&total>TILE_THRESHOLD){
       const grid=total>12000?5:total>5000?4:3;
-      for(const cell of splitBounds(bbox(geo.lon,geo.lat,mi),grid)){ await fetchArea(cell); if(truncated)break; }
-    }else await fetchArea();
+      for(const cell of splitBounds(areaBounds||bbox(geo.lon,geo.lat,mi),grid)){ await fetchArea(cell); if(truncated)break; }
+    }else await fetchArea(areaBounds);
     return {features:Array.from(unique.values()),truncated};
   }
 
@@ -500,18 +564,24 @@ export default function FinderPage() {
     if(centerMarker.current){map.removeLayer(centerMarker.current);centerMarker.current=null;}
     if(circle.current){map.removeLayer(circle.current);circle.current=null;}
     try{
-      // A street number in the search box means "find THIS parcel": shrink the
-      // search to the geocoded point and ignore the acreage filters.
-      const isAddress = !override && /^\s*\d+\s+\S+/.test(city);
-      const mi = override?.mi ?? (isAddress ? 0.06 : radius);
+      // A drawn search polygon beats city+radius; a street number in the search
+      // box means "find THIS parcel": shrink to the geocoded point, no filters.
+      const usePoly = !override && !!searchArea;
+      const isAddress = !override && !usePoly && /^\s*\d+\s+\S+/.test(city);
+      const mi = override?.mi ?? (usePoly ? polyReachMi(searchArea!) : (isAddress ? 0.06 : radius));
       const minA = override?.minA ?? (isAddress ? 0 : (minAcres||0));
       const maxA = override?.maxA !== undefined ? override.maxA : (isAddress ? null : (maxAcres?parseFloat(maxAcres):null));
-      setStatusMsg(isAddress ? 'Locating that address…' : 'Locating place…');
-      const geo = override?.geo ?? await geocode(city);
+      setStatusMsg(usePoly ? 'Reading your drawn search area…' : isAddress ? 'Locating that address…' : 'Locating place…');
+      let geo = override?.geo;
+      if(!geo&&usePoly){ const c=polyCenter(searchArea!); geo=await reverseGeo(c[0],c[1]); }
+      if(!geo) geo=await geocode(city);
       if(!geo){ setStatusMsg('Couldn\u2019t find that U.S. place. Try adding a state, e.g. "Shelby, NC".'); setBusy(false); return; }
-      centerMarker.current=L.marker([geo.lat,geo.lon]).addTo(map);
-      circle.current=L.circle([geo.lat,geo.lon],{radius:mi*MILES_TO_M,color:'#6FD6E0',weight:1,fillColor:'#6FD6E0',fillOpacity:.05}).addTo(map);
-      map.setView([geo.lat,geo.lon],isAddress?15:11);
+      if(!usePoly){
+        centerMarker.current=L.marker([geo.lat,geo.lon]).addTo(map);
+        circle.current=L.circle([geo.lat,geo.lon],{radius:mi*MILES_TO_M,color:'#6FD6E0',weight:1,fillColor:'#6FD6E0',fillOpacity:.05}).addTo(map);
+        map.setView([geo.lat,geo.lon],isAddress?15:11);
+      } else if(searchAreaLayer.current){ try{ map.fitBounds(searchAreaLayer.current.getBounds(),{padding:[40,40]}); }catch{} }
+      const areaBounds = usePoly ? polyBBox(searchArea!) : undefined;
       const areas=await searchAreas(geo,mi);
       const sources=srcForAreas(areas);
       if(!sources.length){ setStatusMsg(`Found ${geo.label.split(',')[0]}, but no free parcel source covers ${geo.county||geo.state||'that area'} yet. NC is statewide; in SC, York & Greenville are wired — Lancaster, Chester & Spartanburg need a source added.`); setBusy(false); return; }
@@ -521,22 +591,30 @@ export default function FinderPage() {
       const all:any[]=[], warn:string[]=[];
       for(const s of sources){
         try{
-          const queried=await querySource(s,geo,mi,minA,maxA),feats=queried.features;
+          const queried=await querySource(s,geo,mi,minA,maxA,areaBounds),feats=queried.features;
           if(queried.truncated)warn.push(`${s.label||s.state}: stopped at ${MAX_SOURCE_RESULTS.toLocaleString()} parcels`);
           // Address mode: a big parcel's centroid can sit far from the pin —
           // the GIS already confirmed the point is inside it, so keep it.
-          for(const f of feats){ const n=normalize(f,s,geo); if(!n)continue; if(!isAddress&&n.distance>mi)continue; if(n.acres!=null){ if(n.acres<minA)continue; if(maxA!=null&&n.acres>maxA)continue; } all.push(n); }
+          for(const f of feats){
+            const n=normalize(f,s,geo); if(!n)continue;
+            if(usePoly){ if(!n.center||!pointInPoly(n.center as [number,number],searchArea!))continue; }
+            else if(!isAddress&&n.distance>mi)continue;
+            if(n.acres!=null){ if(n.acres<minA)continue; if(maxA!=null&&n.acres>maxA)continue; }
+            all.push(n);
+          }
         }catch(e:any){ warn.push(`${s.label||s.state}: ${e.message}`); }
       }
       const deduped=dedupeParcels(all);
-      deduped.forEach((p,i)=>{ p.idx=i; });
+      // Rank for the sidebar: promising acquisitions first, not biggest first.
+      const scoreCtx={ minA, maxA: maxA??null, mi };
+      deduped.forEach((p,i)=>{ p.idx=i; p.cand=candidateInfo(p,scoreCtx); });
       resultsRef.current = deduped;
       for(const p of deduped) pl.addData({ type:'Feature', geometry:p.geojson, properties:p });
       setResults(deduped);
-      if(deduped.length){ try{ map.fitBounds(L.featureGroup([pl,circle.current]).getBounds(),{padding:[40,40]}); }catch{}
+      if(deduped.length){ try{ map.fitBounds(L.featureGroup([pl,circle.current,searchAreaLayer.current].filter(Boolean)).getBounds(),{padding:[40,40]}); }catch{}
         setStatusMsg(isAddress
           ? `Found ${deduped.length===1?'the parcel':deduped.length+' parcels'} at that address — click it on the map for details, save, and exports.`
-          : `Found ${deduped.length} unique parcel(s) ≥ ${minA} ac within ${mi} mi across ${areas.length||1} count${areas.length===1?'y':'ies'}.${uncovered.length?` No connected parcel source for ${uncoveredLabel}${uncovered.length>4?` and ${uncovered.length-4} more`:''}.`:''}${warn.length?' Some sources had issues.':''}`); }
+          : `Found ${deduped.length} unique parcel(s) ≥ ${minA} ac ${usePoly?'in your drawn area':`within ${mi} mi`} across ${areas.length||1} count${areas.length===1?'y':'ies'}.${uncovered.length?` No connected parcel source for ${uncoveredLabel}${uncovered.length>4?` and ${uncovered.length-4} more`:''}.`:''}${warn.length?' Some sources had issues.':''}`); }
       else setStatusMsg(isAddress?`Geocoded the address, but no parcel layer covers that exact point. Try the county name instead.`:`No parcels matched. Try a larger radius or lower minimum acreage.`);
     }catch(e:any){ setStatusMsg('Search failed: '+e.message); }
     finally{ setBusy(false); }
@@ -626,6 +704,26 @@ export default function FinderPage() {
         <button className="btn btn-primary" style={{ width:'100%', marginTop:12 }} onClick={()=>runSearch()} disabled={!ready||busy}>
           {busy ? 'Searching…' : 'Find parcels'}
         </button>
+        {searchArea ? (
+          <div style={{ border:'1px solid var(--cyan)', borderRadius:8, padding:'9px 11px', marginTop:9, background:'rgba(111,214,224,.05)' }}>
+            <div className="mono" style={{ fontSize:11.5, color:'var(--cyan)' }}>Searching inside your drawn area ({searchArea.length} corners) — city & radius ignored</div>
+            <button className="btn" style={{ padding:'4px 10px', fontSize:12, marginTop:7 }} onClick={clearSearchArea}>✕ Clear — back to city + radius</button>
+          </div>
+        ) : drawing && drawTarget==='search' ? (
+          <div style={{ border:'1px dashed var(--cyan)', borderRadius:8, padding:'9px 11px', marginTop:9 }}>
+            <div className="mono" style={{ fontSize:11.5, color:'var(--cyan)', lineHeight:1.5 }}>
+              Click the map at each corner of your search area — {drawCount} point{drawCount===1?'':'s'} so far. Double-click (or Finish) to close it.
+            </div>
+            <div style={{ display:'flex', gap:6, marginTop:8 }}>
+              <button className="btn" style={{ padding:'4px 10px', fontSize:12 }} onClick={finishDraw} disabled={drawCount<3}>✓ Finish area</button>
+              <button className="btn" style={{ padding:'4px 10px', fontSize:12 }} onClick={cancelDraw}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <button className="btn" style={{ width:'100%', marginTop:9 }} onClick={()=>startDraw('search')} disabled={!ready||busy}>
+            ✏️ Draw a search area on the map instead
+          </button>
+        )}
 
         <label className="label" style={{ marginTop:14, display:'block' }}>Or search by parcel #</label>
         <div style={{ display:'flex', gap:6 }}>
@@ -651,7 +749,7 @@ export default function FinderPage() {
               onChange={e=>setCompRadius(+e.target.value)} style={{ width:'100%', accentColor:'var(--cyan)' }} />
           </div>
         )}
-        {drawing ? (
+        {drawing && drawTarget==='comp' ? (
           <div style={{ border:'1px dashed #FF7BD5', borderRadius:8, padding:'9px 11px', marginBottom:9 }}>
             <div className="mono" style={{ fontSize:11.5, color:'#FF7BD5', lineHeight:1.5 }}>
               Click the map at each corner of your comp area — {drawCount} point{drawCount===1?'':'s'} so far. Double-click (or Finish) to close it.
@@ -662,7 +760,7 @@ export default function FinderPage() {
             </div>
           </div>
         ) : (
-          <button className="btn" style={{ width:'100%', marginBottom:9 }} onClick={startDraw} disabled={!ready}>
+          <button className="btn" style={{ width:'100%', marginBottom:9 }} onClick={()=>startDraw('comp')} disabled={!ready}>
             ✏️ {compArea ? 'Redraw the area' : 'Draw the area on the map instead'}
           </button>
         )}
@@ -717,11 +815,21 @@ export default function FinderPage() {
         {results.length>0 && (
           <div style={{ position:'absolute', top:14, right:14, width:330, maxHeight:'calc(100% - 28px)', overflowY:'auto', zIndex:900,
             background:'var(--ink2)', border:'1px solid var(--line)', borderRadius:12, padding:12 }}>
-            <div className="mono" style={{ fontSize:11, color:'var(--muted)', marginBottom:10 }}>{results.length} unique parcels{results.length>200?' · showing largest 200':''}</div>
-            {[...results].sort((a,b)=>(b.acres||0)-(a.acres||0)).slice(0,200).map(p=>(
+            <div className="mono" style={{ fontSize:11, color:'var(--muted)', marginBottom:10 }}>
+              {results.length} parcels · top {Math.min(20,results.length)} candidates
+              <span style={{ display:'block', marginTop:2 }}>ranked by size fit, shape, owner, access & distance — not raw acreage</span>
+            </div>
+            {[...results].sort((a,b)=>((b.cand?.score??0)-(a.cand?.score??0))||((b.acres||0)-(a.acres||0))).slice(0,20).map(p=>(
               <div key={p.__id} className="card" style={{ padding:'11px 12px', marginBottom:8 }}>
                 <div onClick={()=>focusParcel(p)} style={{ cursor:'pointer' }}>
                   <div className="display" style={{ fontWeight:600, fontSize:13.5 }}>{p.acres!=null?p.acres.toFixed(1)+' acres':'Acreage n/a'}</div>
+                  {p.cand?.why?.length ? (
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:4, marginTop:5 }}>
+                      {p.cand.why.slice(0,4).map((w:string)=>(
+                        <span key={w} className="mono" style={{ fontSize:9.5, padding:'2px 7px', borderRadius:9, border:'1px solid var(--line2)', color:'var(--cyan)' }}>{w}</span>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mono" style={{ fontSize:11.5, color:'var(--muted)', marginTop:4 }}>
                     {p.address || '—'}{p.zoning?` · ${p.zoning}`:''}{p.distance!=null?` · ${p.distance.toFixed(1)} mi`:''}
                   </div>

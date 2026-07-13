@@ -42,6 +42,16 @@ HARD prompt constraints (exclude-when-unsure, never silently widen) and the cens
 tract is sampled at the drawn area's center — so "compare to the neighborhood next
 door" uses THAT neighborhood's stats. Reports restate the comp area used.
 
+## Added 2026-07-13 (later): top-20 candidates + drawn search area
+Results sidebar now ranks the TOP 20 acquisition candidates instead of the 200 largest:
+public/institutional owners (county, church, utility, HOA, railroad…) sink to the bottom;
+size-fit vs the search band, compact shape (Polsby-Popper on the boundary), closeness,
+estate/heirs or individual owners, having a road address, and res/ag zoning score up.
+Each card shows why as chips. Also: "✏️ Draw a search area" under Find parcels — search
+inside a drawn polygon (cyan) instead of city+radius; queries the polygon's bbox
+envelope, filters to the exact shape, county discovery from the polygon centroid.
+Comp area (magenta) and search area (cyan) are independent polygons.
+
 ## Known coverage gap (unchanged from before)
 NC parcels are statewide; in SC, York + Greenville are wired. Lancaster, Chester, Spartanburg
 need a GIS source added to `public/sources.js` later.
