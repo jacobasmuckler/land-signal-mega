@@ -306,7 +306,7 @@ window.SOURCES = [
     state: "North Carolina", stateAbbr: "NC", label: "North Carolina (statewide)", coverage: "statewide",
     serviceUrl: "https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/FeatureServer", layerId: 1,
     acreageField: "gisacres", acreageIsCalculated: false,
-    ownerField: "ownname", addressField: "siteadd", parcelField: "parno", idField: "OBJECTID",
+    ownerField: "ownname", addressField: "siteadd", parcelField: "parno", countyField: "cntyname", idField: "OBJECTID",
     maxRecordCount: 5000, corsEnabled: "yes",
     note: "'/secure/' is just a folder name; no token required. ~5.9M parcels, all 100 counties.",
   },

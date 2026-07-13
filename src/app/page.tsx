@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 import { MAP_LAYERS as LAYERS, buildOverlay } from '@/components/mapLayers';
 import { downloadDXF, downloadSHP } from '@/components/parcelExport';
 
-const MILES_TO_M = 1609.34, HARD_CAP = 3000;
+const MILES_TO_M = 1609.34;
+const TILE_THRESHOLD = 2500;
+const MAX_SOURCE_RESULTS = 25000;
 
 // The utility report comes back as light markdown — render **bold** and
 // [label](url) links, escape everything else, and drop tracking tails.
@@ -210,7 +212,7 @@ export default function FinderPage() {
         if (!window.SOURCES) await addScript('/sources.js');
         if (cancelled || !mapEl.current) return;
         const L = window.L;
-        const map = L.map(mapEl.current, { zoomControl: true }).setView([35.35,-81.0], 8);
+        const map = L.map(mapEl.current, { zoomControl: true, preferCanvas: true }).setView([35.35,-81.0], 8);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
           { attribution:'© OpenStreetMap © CARTO', subdomains:'abcd', maxZoom:19 }).addTo(map);
         const pl = L.geoJSON(null, {
@@ -236,6 +238,29 @@ export default function FinderPage() {
   function srcForState(st:string){ if(!st)return[]; const n=st.trim().toLowerCase(); return (window.SOURCES||[]).filter((s:any)=>s.state.toLowerCase()===n); }
   function srcMatch(s:any,geo:any){ if(!s||!geo)return false; if(s.coverage==='statewide'||s.coverage==='near-statewide'){return !(s.excludedCounties||[]).map(normPlace).includes(normPlace(geo.county));} const cs=(s.counties||s.countyNames||[]).map(normPlace); if(cs.length)return cs.includes(normPlace(geo.county)); return s.coverage!=='county-only'; }
   function srcForLoc(geo:any){ return srcForState(geo.state).filter((s:any)=>srcMatch(s,geo)); }
+  function sourceKey(s:any){ return `${s.serviceUrl.replace(/\/$/,'')}|${s.layerId}`; }
+  function srcForAreas(areas:any[]){
+    const found = new Map<string,any>();
+    for(const area of areas){
+      for(const s of srcForLoc(area)) found.set(sourceKey(s),s);
+    }
+    return Array.from(found.values());
+  }
+
+  async function searchAreas(geo:any,mi:number){
+    try{
+      const res=await fetch('/api/search-areas',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lat:geo.lat,lon:geo.lon,radiusMiles:mi})});
+      const data=await res.json();
+      if(res.ok&&Array.isArray(data.areas)&&data.areas.length)return data.areas;
+    }catch{}
+    return geo.state?[{state:geo.state,stateAbbr:null,county:geo.county||null}]:[];
+  }
+  function fieldValue(a:any,field?:string|null){
+    if(!field)return undefined;
+    if(Object.prototype.hasOwnProperty.call(a,field))return a[field];
+    const actual=Object.keys(a).find(k=>k.toLowerCase()===field.toLowerCase());
+    return actual?a[actual]:undefined;
+  }
 
   async function fetchJson(url:string){
     const r = await fetch(url, { headers:{ Accept:'application/json' } });
@@ -268,31 +293,73 @@ export default function FinderPage() {
     const base=s.serviceUrl.replace(/\/$/,'')+'/'+s.layerId+'/query',p=new URLSearchParams(),w:string[]=[];
     if(s.acreageField&&!s.acreageIsCalculated){ if(minA>0)w.push(`${s.acreageField} >= ${srcAcre(s,minA)}`); if(maxA!=null)w.push(`${s.acreageField} <= ${srcAcre(s,maxA)}`); }
     p.set('where',w.length?w.join(' AND '):'1=1');
-    if(s.spatialMode==='envelope'){ const b=bbox(lon,lat,mi); p.set('geometry',`${b.xmin},${b.ymin},${b.xmax},${b.ymax}`); p.set('geometryType','esriGeometryEnvelope'); p.set('inSR','4326'); }
+    if(opt.bounds||s.spatialMode==='envelope'){ const b=opt.bounds||bbox(lon,lat,mi); p.set('geometry',`${b.xmin},${b.ymin},${b.xmax},${b.ymax}`); p.set('geometryType','esriGeometryEnvelope'); p.set('inSR','4326'); }
     else { p.set('geometry',`${lon},${lat}`); p.set('geometryType','esriGeometryPoint'); p.set('inSR','4326'); p.set('distance',String(mi*MILES_TO_M)); p.set('units','esriSRUnit_Meter'); }
     p.set('spatialRel','esriSpatialRelIntersects'); p.set('outSR','4326'); p.set('f','json');
     if(opt.countOnly){ p.set('returnCountOnly','true'); p.set('returnGeometry','false'); }
-    else { p.set('outFields','*'); p.set('returnGeometry','true'); p.set('resultRecordCount',String(opt.pageSize||s.maxRecordCount||1000)); if(opt.offset)p.set('resultOffset',String(opt.offset)); }
+    else { p.set('outFields','*'); p.set('returnGeometry','true'); p.set('resultRecordCount',String(opt.pageSize||s.maxRecordCount||1000)); p.set('resultOffset',String(opt.offset||0)); if(s.idField)p.set('orderByFields',`${s.idField} ASC`); }
     return base+'?'+p.toString();
   }
   function normalize(f:any,s:any,c:any){
     const a=f.attributes||{}, g=f.geometry&&f.geometry.rings?{type:'Polygon',coordinates:f.geometry.rings}:null;
     if(!g)return null;
-    let ac=s.acreageField?normAcre(s,a[s.acreageField]):null;
+    let ac=s.acreageField?normAcre(s,fieldValue(a,s.acreageField)):null;
     if((ac==null||isNaN(ac)||ac===0)&&(s.acreageIsCalculated!==false||s.calculateAcreageIfMissing)){const cc=polyAcres(g.coordinates);if(cc!=null)ac=cc;}
     const [clat,clon]=centroid(g.coordinates);
-    return { __id:`${s.stateAbbr}-${a[s.idField]||a.OBJECTID||Math.random()}`, acres:ac!=null&&!isNaN(ac)?ac:null,
-      owner:s.ownerField?a[s.ownerField]:null, address:s.addressField?a[s.addressField]:null, parcel:s.parcelField?a[s.parcelField]:null,
+    return { __id:`${sourceKey(s)}|${fieldValue(a,s.idField)??fieldValue(a,'OBJECTID')??Math.random()}`, acres:ac!=null&&!isNaN(ac)?ac:null,
+      owner:fieldValue(a,s.ownerField)??null, address:fieldValue(a,s.addressField)??null, parcel:fieldValue(a,s.parcelField)??null,
       zoning:a.ZONING||a.zoning||a.ZONE||a.Zone_Code||null, sourceLabel:s.label||s.state,
-      county:c.county||null, state:c.state||null,
+      county:(fieldValue(a,s.countyField)??null)||(s.coverage==='county-only'?(s.counties||s.countyNames||[])[0]:null)||c.county||null, state:s.stateAbbr||c.state||null,
       distance:hav(c.lat,c.lon,clat,clon), center:[clat,clon], geojson:g };
   }
+  function splitBounds(b:any,n:number){
+    const cells:any[]=[];
+    for(let y=0;y<n;y++)for(let x=0;x<n;x++)cells.push({xmin:b.xmin+(b.xmax-b.xmin)*x/n,xmax:b.xmin+(b.xmax-b.xmin)*(x+1)/n,ymin:b.ymin+(b.ymax-b.ymin)*y/n,ymax:b.ymin+(b.ymax-b.ymin)*(y+1)/n});
+    return cells;
+  }
+  function featureId(f:any,s:any){ const a=f.attributes||{}; return String(fieldValue(a,s.idField)??fieldValue(a,'OBJECTID')??JSON.stringify(f.geometry?.rings?.[0]?.slice(0,2)||[])); }
   async function querySource(s:any,geo:any,mi:number,minA:number,maxA:number|null){
-    let total=null;
+    let total:number|null=null;
     try{ const cr=await fetchJson(buildUrl(s,geo.lon,geo.lat,mi,minA,maxA,{countOnly:true})); total=typeof cr.count==='number'?cr.count:null; }catch{}
-    const ps=Math.min(s.maxRecordCount||1000,1000),feats:any[]=[]; let off=0;
-    while(true){ const d=await fetchJson(buildUrl(s,geo.lon,geo.lat,mi,minA,maxA,{pageSize:ps,offset:off})); if(d.error)throw new Error(d.error.message||'server error'); const b=d.features||[]; feats.push(...b); off+=b.length; const more=d.exceededTransferLimit||(total!=null&&off<total); if(!b.length||!more)break; if(feats.length>=HARD_CAP)break; }
-    return feats;
+    const ps=Math.min(s.maxRecordCount||1000,1000),unique=new Map<string,any>();
+    let truncated=false;
+
+    async function fetchArea(bounds?:any){
+      let expected:number|null=null;
+      try{ const cr=await fetchJson(buildUrl(s,geo.lon,geo.lat,mi,minA,maxA,{countOnly:true,bounds})); expected=typeof cr.count==='number'?cr.count:null; }catch{}
+      let off=0; const pageSignatures=new Set<string>();
+      for(let page=0;page<100;page++){
+        const d=await fetchJson(buildUrl(s,geo.lon,geo.lat,mi,minA,maxA,{pageSize:ps,offset:off,bounds}));
+        if(d.error)throw new Error(d.error.message||'server error');
+        const rows=d.features||[];
+        if(!rows.length)break;
+        const signature=`${featureId(rows[0],s)}|${featureId(rows[rows.length-1],s)}|${rows.length}`;
+        if(pageSignatures.has(signature))break;
+        pageSignatures.add(signature);
+        for(const f of rows){ unique.set(featureId(f,s),f); if(unique.size>=MAX_SOURCE_RESULTS){truncated=true;return;} }
+        off+=rows.length;
+        if((expected!=null&&off>=expected)||(!d.exceededTransferLimit&&expected==null))break;
+      }
+    }
+
+    if(total!=null&&total>TILE_THRESHOLD){
+      const grid=total>12000?5:total>5000?4:3;
+      for(const cell of splitBounds(bbox(geo.lon,geo.lat,mi),grid)){ await fetchArea(cell); if(truncated)break; }
+    }else await fetchArea();
+    return {features:Array.from(unique.values()),truncated};
+  }
+
+  function dedupeParcels(items:any[]){
+    const ids=new Set<string>(), parcels=new Set<string>(), shapes=new Set<string>(), out:any[]=[];
+    const clean=(v:any)=>String(v||'').toLowerCase().replace(/[^a-z0-9]+/g,'');
+    for(const p of items){
+      const id=String(p.__id||'');
+      const parcel=p.parcel?`${clean(p.sourceLabel)}|${clean(p.state)}|${clean(p.county)}|${clean(p.parcel)}`:'';
+      const shape=p.center?`${clean(p.state)}|${clean(p.county)}|${clean(p.address)}|${Number(p.acres||0).toFixed(3)}|${p.center[0].toFixed(5)}|${p.center[1].toFixed(5)}`:'';
+      if((id&&ids.has(id))||(parcel&&parcels.has(parcel))||(shape&&shapes.has(shape)))continue;
+      if(id)ids.add(id); if(parcel)parcels.add(parcel); if(shape)shapes.add(shape); out.push(p);
+    }
+    return out;
   }
 
   function popupHtml(p:any){
@@ -354,26 +421,30 @@ export default function FinderPage() {
       centerMarker.current=L.marker([geo.lat,geo.lon]).addTo(map);
       circle.current=L.circle([geo.lat,geo.lon],{radius:mi*MILES_TO_M,color:'#6FD6E0',weight:1,fillColor:'#6FD6E0',fillOpacity:.05}).addTo(map);
       map.setView([geo.lat,geo.lon],isAddress?15:11);
-      const sources=srcForLoc(geo);
+      const areas=await searchAreas(geo,mi);
+      const sources=srcForAreas(areas);
       if(!sources.length){ setStatusMsg(`Found ${geo.label.split(',')[0]}, but no free parcel source covers ${geo.county||geo.state||'that area'} yet. NC is statewide; in SC, York & Greenville are wired — Lancaster, Chester & Spartanburg need a source added.`); setBusy(false); return; }
-      setStatusMsg(`Searching ${sources.length} source(s) near ${geo.label.split(',')[0]}…`);
+      const uncovered=areas.filter((area:any)=>!srcForLoc(area).length);
+      setStatusMsg(`Searching ${sources.length} source(s) across ${areas.length||1} count${areas.length===1?'y':'ies'} near ${geo.label.split(',')[0]}…`);
       const all:any[]=[], warn:string[]=[];
       for(const s of sources){
         try{
-          const feats=await querySource(s,geo,mi,minA,maxA);
+          const queried=await querySource(s,geo,mi,minA,maxA),feats=queried.features;
+          if(queried.truncated)warn.push(`${s.label||s.state}: stopped at ${MAX_SOURCE_RESULTS.toLocaleString()} parcels`);
           // Address mode: a big parcel's centroid can sit far from the pin —
           // the GIS already confirmed the point is inside it, so keep it.
           for(const f of feats){ const n=normalize(f,s,geo); if(!n)continue; if(!isAddress&&n.distance>mi)continue; if(n.acres!=null){ if(n.acres<minA)continue; if(maxA!=null&&n.acres>maxA)continue; } all.push(n); }
         }catch(e:any){ warn.push(`${s.label||s.state}: ${e.message}`); }
       }
-      all.forEach((p,i)=>{ p.idx=i; });
-      resultsRef.current = all;
-      for(const p of all) pl.addData({ type:'Feature', geometry:p.geojson, properties:p });
-      setResults(all);
-      if(all.length){ try{ map.fitBounds(L.featureGroup([pl,circle.current]).getBounds(),{padding:[40,40]}); }catch{}
+      const deduped=dedupeParcels(all);
+      deduped.forEach((p,i)=>{ p.idx=i; });
+      resultsRef.current = deduped;
+      for(const p of deduped) pl.addData({ type:'Feature', geometry:p.geojson, properties:p });
+      setResults(deduped);
+      if(deduped.length){ try{ map.fitBounds(L.featureGroup([pl,circle.current]).getBounds(),{padding:[40,40]}); }catch{}
         setStatusMsg(isAddress
-          ? `Found ${all.length===1?'the parcel':all.length+' parcels'} at that address — click it on the map for details, save, and exports.`
-          : `Found ${all.length} parcel(s) ≥ ${minA} ac within ${mi} mi.${warn.length?' Some sources had issues.':''}`); }
+          ? `Found ${deduped.length===1?'the parcel':deduped.length+' parcels'} at that address — click it on the map for details, save, and exports.`
+          : `Found ${deduped.length} unique parcel(s) ≥ ${minA} ac within ${mi} mi across ${areas.length||1} count${areas.length===1?'y':'ies'}.${uncovered.length?` ${uncovered.length} touched count${uncovered.length===1?'y has':'ies have'} no connected parcel source.`:''}${warn.length?' Some sources had issues.':''}`); }
       else setStatusMsg(isAddress?`Geocoded the address, but no parcel layer covers that exact point. Try the county name instead.`:`No parcels matched. Try a larger radius or lower minimum acreage.`);
     }catch(e:any){ setStatusMsg('Search failed: '+e.message); }
     finally{ setBusy(false); }
@@ -515,7 +586,7 @@ export default function FinderPage() {
         {results.length>0 && (
           <div style={{ position:'absolute', top:14, right:14, width:330, maxHeight:'calc(100% - 28px)', overflowY:'auto', zIndex:900,
             background:'var(--ink2)', border:'1px solid var(--line)', borderRadius:12, padding:12 }}>
-            <div className="mono" style={{ fontSize:11, color:'var(--muted)', marginBottom:10 }}>{results.length} parcels</div>
+            <div className="mono" style={{ fontSize:11, color:'var(--muted)', marginBottom:10 }}>{results.length} unique parcels{results.length>200?' · showing largest 200':''}</div>
             {[...results].sort((a,b)=>(b.acres||0)-(a.acres||0)).slice(0,200).map(p=>(
               <div key={p.__id} className="card" style={{ padding:'11px 12px', marginBottom:8 }}>
                 <div onClick={()=>focusParcel(p)} style={{ cursor:'pointer' }}>
