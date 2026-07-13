@@ -18,7 +18,7 @@ export async function GET(request: Request) {
   if (!code) return fail(url.searchParams.get('error_description') || 'Microsoft sign-in was cancelled.');
   if (!state || state !== cookieState) return fail('Sign-in session expired — try again.');
 
-  const tenant = process.env.MS_TENANT_ID || 'common';
+  const tenant = process.env.MS_TENANT_ID || 'organizations';
   const tokenRes = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -43,6 +43,16 @@ export async function GET(request: Request) {
   const email = String(claims.email || claims.preferred_username || '').toLowerCase();
   const name = String(claims.name || email.split('@')[0] || 'Teammate');
   if (!email.includes('@')) return fail('Microsoft account has no email — contact IT.');
+
+  // Registering the app as multi-tenant ("organizations") means ANY company's
+  // Microsoft 365 tenant can attempt sign-in. This allow-list is what actually
+  // restricts it to Fitprecast + Northbridge (or whichever tenant IDs are set)
+  // — without it, employees of any other company could create an account.
+  const allowedTenants = (process.env.ALLOWED_MS_TENANT_IDS || process.env.MS_TENANT_ID || '')
+    .split(',').map(t => t.trim()).filter(Boolean);
+  if (allowedTenants.length && !allowedTenants.includes(String(claims.tid))) {
+    return fail('Your Microsoft account is not from an approved company tenant. Contact Jacob if this is wrong.');
+  }
 
   const user = await prisma.user.upsert({
     where: { email },

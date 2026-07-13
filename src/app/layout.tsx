@@ -27,11 +27,19 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             </Link>
             <div className="flex items-center gap-3">
               <NavLinks />
-              {session && (
+              {session ? (
                 <form action="/api/auth/logout" method="post" className="flex items-center gap-2" style={{ borderLeft: '1px solid var(--line)', paddingLeft: 12 }}>
-                  <span className="mono" style={{ fontSize: 11.5, color: 'var(--muted)' }}>{session.name.split(' ')[0]}</span>
+                  <span className="mono" style={{ fontSize: 11.5, color: 'var(--muted)' }}>Hi, {session.name.split(' ')[0]}</span>
                   <button className="mono" style={{ fontSize: 11, padding: '4px 9px', borderRadius: 8, border: '1px solid var(--line2)', background: 'transparent', color: 'var(--muted)', cursor: 'pointer' }}>Log out</button>
                 </form>
+              ) : (
+                // No personal session — either the legacy shared password is
+                // still cached in this browser, or auth isn't configured yet.
+                // Never show a blank nav here: always give a way to see/create
+                // a real account instead of silently riding the shared login.
+                <Link href="/login" className="mono" style={{ fontSize: 11.5, color: 'var(--amber)', borderLeft: '1px solid var(--line)', paddingLeft: 12 }}>
+                  Not signed in · Sign in →
+                </Link>
               )}
             </div>
           </div>

@@ -4,7 +4,11 @@ export const dynamic = 'force-dynamic';
 // MS_CLIENT_SECRET, MS_TENANT_ID in Railway (from the Azure app registration).
 export async function GET(request: Request) {
   const clientId = process.env.MS_CLIENT_ID;
-  const tenant = process.env.MS_TENANT_ID || 'common';
+  // 'organizations' accepts any work/school Microsoft 365 tenant (Fitprecast,
+  // Northbridge, etc.) but excludes personal @outlook.com/@hotmail.com accounts.
+  // Which actual tenants are allowed to log in is enforced in the callback
+  // via ALLOWED_MS_TENANT_IDS — this endpoint just decides who can attempt it.
+  const tenant = process.env.MS_TENANT_ID || 'organizations';
   if (!clientId) return new Response('Microsoft sign-in not configured (MS_CLIENT_ID missing).', { status: 503 });
 
   const origin = new URL(request.url).origin;
