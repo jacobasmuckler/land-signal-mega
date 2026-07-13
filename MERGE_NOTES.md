@@ -32,6 +32,16 @@ service, consistent statewide — new `geomAreaField`/`geomAreaUnit` source opti
 `normalize()` trusts that field over per-county attributes. Also fixed `polyAcres` to sum
 all rings (multi-part parcels/holes) instead of only the first ring.
 
+## Added 2026-07-13: comp data area controls
+Sidebar "Comp data area" panel scopes where 💰 Deal analysis, 📊 Market stats and the
+📋 report's comps pull data from: a radius slider (0.5–15 mi), a draw-on-map polygon
+(click corners, double-click/Finish to close, click-transparent so parcels stay
+clickable), a "new-construction comps only" toggle, and a free-text criteria box
+(e.g. "3000+ sqft, same school district"). `src/lib/compScope.ts` turns the scope into
+HARD prompt constraints (exclude-when-unsure, never silently widen) and the census
+tract is sampled at the drawn area's center — so "compare to the neighborhood next
+door" uses THAT neighborhood's stats. Reports restate the comp area used.
+
 ## Known coverage gap (unchanged from before)
 NC parcels are statewide; in SC, York + Greenville are wired. Lancaster, Chester, Spartanburg
 need a GIS source added to `public/sources.js` later.

@@ -1,4 +1,5 @@
 import { runOpenAISearch } from '@/lib/openaiRequest';
+import { parseCompScope, scopeCenter, describeArea, compScopeLines } from '@/lib/compScope';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -48,7 +49,12 @@ export async function POST(request: Request) {
     return Response.json({ report: 'Deal analysis needs OPENAI_API_KEY in Railway (same key the utility research uses).' });
   }
 
-  const stats = await censusStats(lat, lon);
+  // Comp scope: user-drawn area / radius / filters. Census stats are sampled
+  // at the drawn area's center when one exists — "compare to the neighborhood
+  // next door" means THAT neighborhood's tract, not the parcel's.
+  const scope = parseCompScope(body.compScope);
+  const center = scopeCenter(scope, { lat, lon });
+  const [stats, areaLabel] = await Promise.all([censusStats(center.lat, center.lon), describeArea(center.lat, center.lon)]);
   const model = process.env.OPENAI_UTILITY_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-mini';
   const where = body.address ? `${body.address}, ${body.county || ''} ${body.state || 'NC'}` : `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
 
@@ -57,17 +63,20 @@ export async function POST(request: Request) {
     'Produce a DEAL SCREEN with a maximum-offer estimate using residual land valuation. Use web search for sold comps and local development costs.',
     '',
     `Parcel: ${where} — ${acres} acres.${body.zoning ? ` Zoning code on record: ${body.zoning}.` : ' Zoning unknown — research or assume typical for the area and SAY SO.'}${body.owner ? ` Owner of record: ${body.owner}.` : ''}`,
-    stats ? `Census tract data (authoritative — use these): median home value $${stats.medianHomeValue?.toLocaleString() ?? 'n/a'}, median household income $${stats.medianIncome?.toLocaleString() ?? 'n/a'}, median year built ${stats.medianYearBuilt ?? 'n/a'} (${stats.area}).` : 'No census data available — rely on web search.',
+    stats ? `Census tract data for the comp area (authoritative — use these): median home value $${stats.medianHomeValue?.toLocaleString() ?? 'n/a'}, median household income $${stats.medianIncome?.toLocaleString() ?? 'n/a'}, median year built ${stats.medianYearBuilt ?? 'n/a'} (${stats.area}).` : 'No census data available — rely on web search.',
+    '',
+    ...compScopeLines(scope, where, areaLabel),
     '',
     'Method — show the numbers at every step and label every assumption as an assumption:',
     '1. LOT YIELD: density from zoning (or stated assumption, typically 2-4 lots/acre suburban single-family) × acres, minus 20-25% for roads/stormwater. Note floodplain/terrain risk if likely.',
-    '2. FINISHED HOME VALUE: median NEW-construction sold price and $/sqft within ~3 miles (web search; else adjust the census median home value upward for new construction).',
+    '2. FINISHED HOME VALUE: median NEW-construction sold price and $/sqft inside the comp area defined above (web search; else adjust the census median home value upward for new construction and say so).',
     '3. FINISHED LOT VALUE: 20-25% of finished home price.',
     '4. DEVELOPMENT COST per lot: research or assume (typical $40k-70k/lot with public sewer; if sewer is unlikely, switch to septic math — fewer, larger lots — and say so).',
     '5. RAW LAND VALUE to a developer: (finished lot value − dev cost) × lots × ~50-60% discount for time/risk/profit.',
     '6. MAX OFFER for a land flipper: buy at 60-75% of the developer raw-land value.',
     '',
     'Output format (under 400 words):',
+    '**Comp area used**: one line restating the boundary/radius and any comp filters you were given above, so the reader knows the scope.',
     '**Verdict**: PURSUE / MAYBE / PASS — one sentence why.',
     '**Max offer range**: $low - $high total (and per acre).',
     '**The math**: steps 1-6 compactly, one line each, with the numbers used.',

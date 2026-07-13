@@ -1,4 +1,5 @@
 import { runUtilityResearch } from '@/lib/utilityResearch';
+import { parseCompScope } from '@/lib/compScope';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -28,7 +29,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const report = await runUtilityResearch(info, body.mode === 'full' ? 'full' : 'utilities');
+    const report = await runUtilityResearch(info, body.mode === 'full' ? 'full' : 'utilities', body.compScope ? parseCompScope(body.compScope) : null);
     return Response.json({ report });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Utility research failed';

@@ -1,4 +1,5 @@
 import { runOpenAISearch } from '@/lib/openaiRequest';
+import { parseCompScope, scopeCenter, describeArea, compScopeLines, type CompScope } from '@/lib/compScope';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -39,7 +40,7 @@ async function acsStats(state: string, county: string, tract: string, key: strin
   };
 }
 
-async function aiMarketLine(address: string | undefined, lat: number, lon: number) {
+async function aiMarketLine(address: string | undefined, lat: number, lon: number, scope: CompScope, areaLabel: string | null) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
   const model = process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-mini';
@@ -47,7 +48,12 @@ async function aiMarketLine(address: string | undefined, lat: number, lon: numbe
   try {
     return await runOpenAISearch(
       apiKey, model,
-      `Using web search, for the residential market within ~3 miles of ${where} (Charlotte NC region): report the median recent SOLD home price, median sold price per square foot, and typical new-construction home size in sqft. 4 lines max, each "Label: value (source)". Only values a source actually shows — write "not found" otherwise.`,
+      [
+        `Using web search, for the residential market around ${where}:`,
+        ...compScopeLines(scope, where, areaLabel),
+        'Report: the median recent SOLD home price, median sold price per square foot, and typical new-construction home size in sqft — all from inside the comp area above.',
+        '5 lines max, each "Label: value (source)". First line restates the comp area/filters used. Only values a source actually shows — write "not found" otherwise.',
+      ].join('\n'),
     );
   } catch { return null; }
 }
@@ -61,9 +67,14 @@ export async function POST(request: Request) {
   }
 
   const censusKey = process.env.CENSUS_API_KEY?.trim();
+  // Census stats come from the drawn comp area's center when one exists —
+  // "show me the neighborhood next door" means that tract, not the parcel's.
+  const scope = parseCompScope(body.compScope);
+  const center = scopeCenter(scope, { lat, lon });
+  const areaLabel = await describeArea(center.lat, center.lon);
   const [tract, ai] = await Promise.all([
-    tractFor(lat, lon).catch(() => null),
-    aiMarketLine(body.address, lat, lon),
+    tractFor(center.lat, center.lon).catch(() => null),
+    aiMarketLine(body.address, lat, lon, scope, areaLabel),
   ]);
   const stats = tract && censusKey ? await acsStats(tract.state, tract.county, tract.tract, censusKey).catch(() => null) : null;
 

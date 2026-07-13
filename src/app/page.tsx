@@ -42,13 +42,75 @@ export default function FinderPage() {
   const resultsRef = useRef<any[]>([]);
   const [utilReport, setUtilReport] = useState<{ title: string; text: string; loading: boolean; loadingMsg?: string } | null>(null);
 
+  // Comp scope: which area (radius or drawn polygon) + filters the deal
+  // analysis / market stats / comps must pull data from. Read via ref so the
+  // once-registered popup-event handlers always see the current values.
+  const [compRadius, setCompRadius] = useState(3);
+  const [compNewOnly, setCompNewOnly] = useState(false);
+  const [compCriteria, setCompCriteria] = useState('');
+  const [compArea, setCompArea] = useState<[number, number][] | null>(null);
+  const [drawing, setDrawing] = useState(false);
+  const [drawCount, setDrawCount] = useState(0);
+  const compAreaLayer = useRef<any>(null);
+  const drawRef = useRef<{ active: boolean; pts: [number, number][]; layer: any }>({ active: false, pts: [], layer: null });
+  const compScopeRef = useRef<any>(null);
+  compScopeRef.current = { radiusMiles: compRadius, polygon: compArea, newOnly: compNewOnly, criteria: compCriteria };
+  function scopeSummary() {
+    const s = compScopeRef.current;
+    return `${s.polygon ? 'your drawn area' : `within ${s.radiusMiles} mi`}${s.newOnly ? ' · new builds only' : ''}${s.criteria ? ` · ${s.criteria}` : ''}`;
+  }
+
+  function redrawTempArea() {
+    const L = window.L, map = mapRef.current, d = drawRef.current;
+    if (!map || !window.L) return;
+    if (d.layer) { map.removeLayer(d.layer); d.layer = null; }
+    if (d.pts.length) {
+      d.layer = (d.pts.length >= 3 ? L.polygon : L.polyline)(d.pts, { color: '#FF7BD5', weight: 2, dashArray: '6 5', fillColor: '#FF7BD5', fillOpacity: .05, interactive: false }).addTo(map);
+    }
+  }
+  function startDraw() {
+    const map = mapRef.current; if (!map) return;
+    clearCompArea();
+    drawRef.current = { active: true, pts: [], layer: null };
+    map.doubleClickZoom.disable();
+    map.getContainer().style.cursor = 'crosshair';
+    setDrawing(true); setDrawCount(0);
+  }
+  function cancelDraw() {
+    const map = mapRef.current, d = drawRef.current;
+    if (d.layer && map) map.removeLayer(d.layer);
+    drawRef.current = { active: false, pts: [], layer: null };
+    if (map) { map.doubleClickZoom.enable(); map.getContainer().style.cursor = ''; }
+    setDrawing(false); setDrawCount(0);
+  }
+  function finishDraw() {
+    const L = window.L, map = mapRef.current, d = drawRef.current;
+    if (!map || !d.active) return;
+    // A double-click fires two click events first — drop consecutive dupes.
+    const pts = d.pts.filter((p, i, arr) => i === 0 || Math.abs(p[0] - arr[i - 1][0]) > 1e-7 || Math.abs(p[1] - arr[i - 1][1]) > 1e-7);
+    if (pts.length < 3) { cancelDraw(); return; }
+    if (d.layer) map.removeLayer(d.layer);
+    drawRef.current = { active: false, pts: [], layer: null };
+    map.doubleClickZoom.enable(); map.getContainer().style.cursor = '';
+    compAreaLayer.current = L.polygon(pts, { color: '#FF7BD5', weight: 2, dashArray: '6 5', fillColor: '#FF7BD5', fillOpacity: .05, interactive: false }).addTo(map);
+    setCompArea(pts); setDrawing(false); setDrawCount(0);
+  }
+  function clearCompArea() {
+    const map = mapRef.current;
+    if (compAreaLayer.current && map) map.removeLayer(compAreaLayer.current);
+    compAreaLayer.current = null;
+    setCompArea(null);
+  }
+  const drawFns = useRef<any>({});
+  drawFns.current = { redrawTempArea, finishDraw };
+
   // Map-popup buttons fire CustomEvents with the parcel's index — research,
   // exports, and comps all hang off these listeners.
   useEffect(() => {
     async function research(p: any, mode: 'utilities' | 'full') {
       const title = `${mode === 'full' ? '📋' : '⚡'} ${p.acres != null ? p.acres.toFixed(1) + ' ac · ' : ''}${p.address || p.parcel || 'parcel'}`;
       setUtilReport({ title, text: '', loading: true, loadingMsg: mode === 'full'
-        ? 'Researching zoning, schools & comparable land sales… usually 20–40 seconds.'
+        ? `Researching zoning, schools & comparable land sales (comps ${scopeSummary()})… usually 20–40 seconds.`
         : 'Researching water, sewer, electric & gas for this parcel… usually 20–40 seconds.' });
       try {
         const res = await fetch('/api/parcels/utility-research', {
@@ -58,6 +120,7 @@ export default function FinderPage() {
             acres: p.acres, address: p.address, owner: p.owner, zoning: p.zoning,
             parcel: p.parcel, county: p.county, state: p.state,
             lat: p.center?.[0], lon: p.center?.[1],
+            ...(mode === 'full' ? { compScope: compScopeRef.current } : {}),
           }),
         });
         const j = await res.json();
@@ -74,11 +137,11 @@ export default function FinderPage() {
       const p = resultsRef.current[e.detail];
       if (!p?.center) return;
       const title = `📊 Market — ${p.address || p.parcel || 'area'}`;
-      setUtilReport({ title, text: '', loading: true, loadingMsg: 'Pulling census housing data + recent sold prices for this area… usually 15–30 seconds.' });
+      setUtilReport({ title, text: '', loading: true, loadingMsg: `Pulling census housing data + recent sold prices (${scopeSummary()})… usually 15–30 seconds.` });
       try {
         const res = await fetch('/api/market-snapshot', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lat: p.center[0], lon: p.center[1], address: p.address ? `${p.address}, ${p.county || ''} ${p.state || 'NC'}` : undefined }),
+          body: JSON.stringify({ lat: p.center[0], lon: p.center[1], address: p.address ? `${p.address}, ${p.county || ''} ${p.state || 'NC'}` : undefined, compScope: compScopeRef.current }),
         });
         const j = await res.json();
         const money = (v: number | null) => v ? '$' + Math.round(v).toLocaleString() : 'n/a';
@@ -137,13 +200,14 @@ export default function FinderPage() {
       const p = resultsRef.current[e.detail];
       if (!p?.center || p.acres == null) return;
       const title = `💰 Deal analysis — ${p.acres.toFixed(1)} ac · ${p.address || p.parcel || 'parcel'}`;
-      setUtilReport({ title, text: '', loading: true, loadingMsg: 'Running the numbers: lot yield, sold comps, development costs, max offer… usually 30–60 seconds.' });
+      setUtilReport({ title, text: '', loading: true, loadingMsg: `Running the numbers: lot yield, sold comps (${scopeSummary()}), development costs, max offer… usually 30–60 seconds.` });
       try {
         const res = await fetch('/api/parcels/deal-analysis', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             lat: p.center[0], lon: p.center[1], acres: p.acres,
             address: p.address, county: p.county, state: p.state, zoning: p.zoning, owner: p.owner,
+            compScope: compScopeRef.current,
           }),
         });
         const j = await res.json();
@@ -219,6 +283,16 @@ export default function FinderPage() {
           style:{ color:'#E8B04B', weight:1.4, fillColor:'#E8B04B', fillOpacity:.12 },
           onEachFeature:(f:any,l:any)=> l.bindPopup(popupHtml(f.properties)),
         }).addTo(map);
+        // Comp-area drawing: while active, map clicks add corners (and don't
+        // open parcel popups); double-click closes the polygon.
+        map.on('click', (e:any) => {
+          if (!drawRef.current.active) return;
+          map.closePopup();
+          drawRef.current.pts.push([e.latlng.lat, e.latlng.lng]);
+          drawFns.current.redrawTempArea();
+          setDrawCount(c => c + 1);
+        });
+        map.on('dblclick', () => { if (drawRef.current.active) drawFns.current.finishDraw(); });
         mapRef.current = map; parcelLayerRef.current = pl;
         setReady(true);
       } catch { setStatusMsg('Map failed to load — check your connection.'); }
@@ -560,6 +634,45 @@ export default function FinderPage() {
           <button className="btn" style={{ flex:'none', padding:'8px 12px' }} onClick={searchByParcelNo} disabled={!ready||busy||!parcelNo.trim()}>Find</button>
         </div>
         <div className="mono" style={{ fontSize:10.5, color:'var(--muted)', marginTop:4 }}>Uses the city/county above to pick the right county records.</div>
+
+        <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)', margin:'20px 0 9px' }}>Comp data area</div>
+        <div className="mono" style={{ fontSize:10.5, color:'var(--muted)', marginBottom:8, lineHeight:1.5 }}>
+          Where 💰 Deal analysis, 📊 Market stats & 📋 comps pull their data from.
+        </div>
+        {compArea ? (
+          <div style={{ border:'1px solid #FF7BD5', borderRadius:8, padding:'9px 11px', marginBottom:9, background:'rgba(255,123,213,.05)' }}>
+            <div className="mono" style={{ fontSize:11.5, color:'#FF7BD5' }}>Using your drawn area ({compArea.length} corners)</div>
+            <button className="btn" style={{ padding:'4px 10px', fontSize:12, marginTop:7 }} onClick={clearCompArea}>✕ Clear — back to radius</button>
+          </div>
+        ) : (
+          <div style={{ marginBottom:9 }}>
+            <label className="label">Pull comps within <b style={{ color:'var(--cyan)' }}>{compRadius} mi</b> of the parcel</label>
+            <input type="range" min={0.5} max={15} step={0.5} value={compRadius}
+              onChange={e=>setCompRadius(+e.target.value)} style={{ width:'100%', accentColor:'var(--cyan)' }} />
+          </div>
+        )}
+        {drawing ? (
+          <div style={{ border:'1px dashed #FF7BD5', borderRadius:8, padding:'9px 11px', marginBottom:9 }}>
+            <div className="mono" style={{ fontSize:11.5, color:'#FF7BD5', lineHeight:1.5 }}>
+              Click the map at each corner of your comp area — {drawCount} point{drawCount===1?'':'s'} so far. Double-click (or Finish) to close it.
+            </div>
+            <div style={{ display:'flex', gap:6, marginTop:8 }}>
+              <button className="btn" style={{ padding:'4px 10px', fontSize:12 }} onClick={finishDraw} disabled={drawCount<3}>✓ Finish area</button>
+              <button className="btn" style={{ padding:'4px 10px', fontSize:12 }} onClick={cancelDraw}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <button className="btn" style={{ width:'100%', marginBottom:9 }} onClick={startDraw} disabled={!ready}>
+            ✏️ {compArea ? 'Redraw the area' : 'Draw the area on the map instead'}
+          </button>
+        )}
+        <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', marginBottom:8 }}>
+          <input type="checkbox" checked={compNewOnly} onChange={e=>setCompNewOnly(e.target.checked)} style={{ accentColor:'var(--cyan)' }} />
+          <span style={{ fontSize:12.5 }}>New-construction comps only</span>
+        </label>
+        <label className="label">Extra comp criteria (optional)</label>
+        <input className="input" value={compCriteria} onChange={e=>setCompCriteria(e.target.value)}
+          placeholder="e.g. 3000+ sqft, same school district" />
 
         <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)', margin:'20px 0 9px' }}>Feasibility layers</div>
         {LAYERS.map(l=>{

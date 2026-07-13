@@ -2,6 +2,7 @@
 // utility GIS for every parcel in the country is not feasible — so this runs
 // on demand, per parcel, when someone clicks "Research utilities".
 import { runOpenAISearch } from './openaiRequest';
+import { compScopeLines, describeArea, polygonCenter, type CompScope } from './compScope';
 
 export type ParcelInfo = {
   title?: string | null;
@@ -28,7 +29,7 @@ function countyName(value?: string | null) {
   return c === 'Unknown' ? c : c.replace(/\s+county$/i, '') + ' County';
 }
 
-export async function runUtilityResearch(info: ParcelInfo, mode: 'utilities' | 'full' = 'utilities'): Promise<string> {
+export async function runUtilityResearch(info: ParcelInfo, mode: 'utilities' | 'full' = 'utilities', scope?: CompScope | null): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     return [
@@ -40,13 +41,25 @@ export async function runUtilityResearch(info: ParcelInfo, mode: 'utilities' | '
   }
 
   const model = process.env.OPENAI_UTILITY_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-mini';
+  // Comp scope only affects the comps section (full mode): resolve a place
+  // label for the scope center so the AI can search by neighborhood name.
+  let scopeLines: string[] = [];
+  if (mode === 'full' && scope) {
+    const parcelLabel = compact(info.address) !== 'Unknown'
+      ? `${compact(info.address)}, ${countyName(info.county)}`
+      : `coordinates ${info.latitude ?? '?'}, ${info.longitude ?? '?'}`;
+    const c = scope.polygon ? polygonCenter(scope.polygon)
+      : (info.latitude != null && info.longitude != null ? { lat: Number(info.latitude), lon: Number(info.longitude) } : null);
+    const areaLabel = c ? await describeArea(c.lat, c.lon) : null;
+    scopeLines = ['', 'Comp scope for section 3 (hard limits):', ...compScopeLines(scope, parcelLabel, areaLabel)];
+  }
   const focus = mode === 'full'
     ? [
       'You are a commercial land due-diligence assistant.',
       'Research this parcel using web search and produce a due-diligence brief covering:',
       '1. Zoning: current zoning designation, what it likely permits (residential density, commercial, agricultural), and the county/city planning department to confirm with.',
       '2. Schools: the assigned public school district plus nearby elementary/middle/high schools.',
-      '3. Comps: recent (last ~3 years) comparable LAND sales nearby — similar acreage vacant/rural land, with price and $/acre where a public source shows it. If none found, say so plainly.',
+      `3. Comps: recent (last ~3 years) comparable LAND sales ${scopeLines.length ? 'inside the comp scope below' : 'nearby'} — similar acreage vacant/rural land, with price and $/acre where a public source shows it. If none found, say so plainly.`,
       '4. Utilities: one short paragraph on public water/sewer likelihood and the electric provider.',
       'Never invent sale prices or zoning codes — only report what a source shows, with confidence levels and source links.',
     ]
@@ -59,6 +72,7 @@ export async function runUtilityResearch(info: ParcelInfo, mode: 'utilities' | '
     ];
   const prompt = [
     ...focus,
+    ...scopeLines,
     '',
     'Parcel:',
     `Title: ${compact(info.title)}`,
