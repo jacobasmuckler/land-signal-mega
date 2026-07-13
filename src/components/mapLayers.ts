@@ -11,6 +11,9 @@ export const MAP_LAYERS = [
     url:'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/export' },
   { id:'topo', name:'Topography / contours', note:'USGS 3DEP', color:'#C7A867', type:'tile',
     url:'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}', opacity:.7 },
+  { id:'slope', name:'Steep slopes', note:'USGS 3DEP — greener = flatter, red = steep grading cost', color:'#E8734B', type:'esriImage',
+    url:'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage',
+    renderingRule:'{"rasterFunction":"Slope Map"}' },
   // Zoning was tried as a map overlay but the source layer draws boundary
   // outlines only (no category fill) — at any normal zoom, thousands of them
   // merge into a solid-looking blob instead of a useful legend. Zoning is
@@ -24,12 +27,13 @@ export const MAP_LAYERS = [
   // come from the ⚡ Research utilities button instead.
 ];
 
-function esriOverlay(L: any, map: any, exportUrl: string, layers?: string) {
+function esriOverlay(L: any, map: any, exportUrl: string, layers?: string, extra?: Record<string, string>) {
   const group = L.layerGroup(); let img: any = null;
   function refresh() {
     const b = map.getBounds(), size = map.getSize();
     const params: any = { bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(','), bboxSR: '4326', imageSR: '3857', size: `${size.x},${size.y}`, format: 'png32', transparent: 'true', f: 'image' };
     if (layers) params.layers = layers;
+    if (extra) Object.assign(params, extra);
     const u = exportUrl + '?' + new URLSearchParams(params);
     if (img) group.removeLayer(img);
     img = L.imageOverlay(u, b, { opacity: .6 });
@@ -96,5 +100,7 @@ export function buildOverlay(L: any, map: any, def: any) {
   if (def.type === 'tile') return L.tileLayer(def.url, { opacity: def.opacity || .6, subdomains: 'abc', maxZoom: 19, attribution: def.note });
   if (def.type === 'esriGroup') return esriOverlayGroup(L, map, def.sources || []);
   if (def.type === 'featureGroup') return arcgisFeatureOverlay(L, map, def.sources || []);
+  // ImageServer /exportImage with a server-side rendering rule (e.g. slope coloring)
+  if (def.type === 'esriImage') return esriOverlay(L, map, def.url, undefined, def.renderingRule ? { renderingRule: def.renderingRule } : undefined);
   return esriOverlay(L, map, def.url, def.layers);
 }

@@ -151,10 +151,38 @@ export default function FinderPage() {
       }
     }
 
+    // 🌱 Soil / septic — USDA soil survey + septic suitability rating.
+    async function onSoil(e: any) {
+      const p = resultsRef.current[e.detail];
+      if (!p?.center) return;
+      const title = `🌱 Soil — ${p.address || p.parcel || 'parcel'}`;
+      setUtilReport({ title, text: '', loading: true, loadingMsg: 'Looking up USDA soil survey + septic suitability… usually 5–15 seconds.' });
+      try {
+        const res = await fetch('/api/parcels/soil', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lat: p.center[0], lon: p.center[1] }),
+        });
+        const j = await res.json();
+        if (j.error) { setUtilReport({ title, text: j.error, loading: false }); return; }
+        const lines: string[] = [];
+        lines.push(`**Soil at parcel center**: ${j.soilName || 'no survey data here'}`);
+        if (j.components?.length) {
+          lines.push('', '**Septic suitability by soil component** (USDA "Septic Tank Absorption Fields"):');
+          for (const c of j.components) lines.push(`- ${c.name} (${c.pct}% of unit): **${c.septicRating}**`);
+          lines.push('', 'How to read it: "Not limited" = septic-friendly. "Somewhat limited" = usually workable with design tweaks. "Very limited" = expect engineered systems or public sewer — fewer, larger lots without it.');
+          lines.push('Note: this is the soil at the parcel’s center point; large parcels can span multiple soil types.');
+        } else if (j.note) lines.push(j.note);
+        setUtilReport({ title, text: lines.join('\n'), loading: false });
+      } catch (err: any) {
+        setUtilReport({ title, text: 'Soil lookup failed: ' + (err?.message || 'network error'), loading: false });
+      }
+    }
+
     window.addEventListener('parcel-utility', onUtility);
     window.addEventListener('parcel-fullreport', onFullReport);
     window.addEventListener('parcel-market', onMarket);
     window.addEventListener('parcel-deal', onDeal);
+    window.addEventListener('parcel-soil', onSoil);
     window.addEventListener('parcel-export', onExport);
     window.addEventListener('parcel-similar', onSimilar);
     window.addEventListener('parcel-save', onSave);
@@ -163,6 +191,7 @@ export default function FinderPage() {
       window.removeEventListener('parcel-fullreport', onFullReport);
       window.removeEventListener('parcel-market', onMarket);
       window.removeEventListener('parcel-deal', onDeal);
+      window.removeEventListener('parcel-soil', onSoil);
       window.removeEventListener('parcel-export', onExport);
       window.removeEventListener('parcel-similar', onSimilar);
       window.removeEventListener('parcel-save', onSave);
@@ -294,6 +323,9 @@ export default function FinderPage() {
         <button onclick="window.dispatchEvent(new CustomEvent('parcel-deal',{detail:${p.idx}}))"
           style="padding:4px 9px;border-radius:7px;border:1px solid #6EE7B7;background:transparent;color:#6EE7B7;cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:600">
           💰 Deal analysis</button>
+        <button onclick="window.dispatchEvent(new CustomEvent('parcel-soil',{detail:${p.idx}}))"
+          style="padding:4px 9px;border-radius:7px;border:1px solid #C4A65B;background:transparent;color:#C4A65B;cursor:pointer;font-family:inherit;font-size:11.5px">
+          🌱 Soil / septic</button>
         <button onclick="window.dispatchEvent(new CustomEvent('parcel-export',{detail:{idx:${p.idx},fmt:'dxf'}}))"
           style="padding:4px 9px;border-radius:7px;border:1px solid #9FB4AF;background:transparent;color:#9FB4AF;cursor:pointer;font-family:inherit;font-size:11.5px">
           ⬇ DXF (CAD)</button>
