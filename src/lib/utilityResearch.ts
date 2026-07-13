@@ -1,6 +1,7 @@
 // AI-powered utility due-diligence for a single parcel or listing. Pulling
 // utility GIS for every parcel in the country is not feasible — so this runs
 // on demand, per parcel, when someone clicks "Research utilities".
+import { runOpenAISearch } from './openaiRequest';
 
 export type ParcelInfo = {
   title?: string | null;
@@ -25,17 +26,6 @@ function compact(value?: string | number | null) {
 function countyName(value?: string | null) {
   const c = compact(value);
   return c === 'Unknown' ? c : c.replace(/\s+county$/i, '') + ' County';
-}
-
-function extractText(data: any): string | undefined {
-  if (typeof data?.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
-  const pieces: string[] = [];
-  for (const item of data?.output || []) {
-    for (const part of item?.content || []) {
-      if (typeof part?.text === 'string') pieces.push(part.text);
-    }
-  }
-  return pieces.join('\n').trim() || undefined;
 }
 
 export async function runUtilityResearch(info: ParcelInfo, mode: 'utilities' | 'full' = 'utilities'): Promise<string> {
@@ -90,23 +80,5 @@ export async function runUtilityResearch(info: ParcelInfo, mode: 'utilities' | '
     'Keep it concise but useful.',
   ].join('\n');
 
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      tools: [{ type: 'web_search' }],
-      input: prompt,
-    }),
-    signal: AbortSignal.timeout(55_000),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = data?.error?.message || `OpenAI request failed with HTTP ${response.status}`;
-    throw new Error(message);
-  }
-  return extractText(data) || 'Utility research completed, but no text report was returned.';
+  return runOpenAISearch(apiKey, model, prompt);
 }

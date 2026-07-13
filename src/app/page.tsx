@@ -38,14 +38,16 @@ export default function FinderPage() {
   const [activeLayers, setActiveLayers] = useState<string[]>([]);
   const [parcelNo, setParcelNo] = useState('');
   const resultsRef = useRef<any[]>([]);
-  const [utilReport, setUtilReport] = useState<{ title: string; text: string; loading: boolean } | null>(null);
+  const [utilReport, setUtilReport] = useState<{ title: string; text: string; loading: boolean; loadingMsg?: string } | null>(null);
 
   // Map-popup buttons fire CustomEvents with the parcel's index — research,
   // exports, and comps all hang off these listeners.
   useEffect(() => {
     async function research(p: any, mode: 'utilities' | 'full') {
       const title = `${mode === 'full' ? '📋' : '⚡'} ${p.acres != null ? p.acres.toFixed(1) + ' ac · ' : ''}${p.address || p.parcel || 'parcel'}`;
-      setUtilReport({ title, text: '', loading: true });
+      setUtilReport({ title, text: '', loading: true, loadingMsg: mode === 'full'
+        ? 'Researching zoning, schools & comparable land sales… usually 20–40 seconds.'
+        : 'Researching water, sewer, electric & gas for this parcel… usually 20–40 seconds.' });
       try {
         const res = await fetch('/api/parcels/utility-research', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -69,8 +71,8 @@ export default function FinderPage() {
     async function onMarket(e: any) {
       const p = resultsRef.current[e.detail];
       if (!p?.center) return;
-      const title = `Market — ${p.address || p.parcel || 'area'}`;
-      setUtilReport({ title, text: '', loading: true });
+      const title = `📊 Market — ${p.address || p.parcel || 'area'}`;
+      setUtilReport({ title, text: '', loading: true, loadingMsg: 'Pulling census housing data + recent sold prices for this area… usually 15–30 seconds.' });
       try {
         const res = await fetch('/api/market-snapshot', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -132,8 +134,8 @@ export default function FinderPage() {
     async function onDeal(e: any) {
       const p = resultsRef.current[e.detail];
       if (!p?.center || p.acres == null) return;
-      const title = `Deal analysis — ${p.acres.toFixed(1)} ac · ${p.address || p.parcel || 'parcel'}`;
-      setUtilReport({ title, text: '', loading: true });
+      const title = `💰 Deal analysis — ${p.acres.toFixed(1)} ac · ${p.address || p.parcel || 'parcel'}`;
+      setUtilReport({ title, text: '', loading: true, loadingMsg: 'Running the numbers: lot yield, sold comps, development costs, max offer… usually 30–60 seconds.' });
       try {
         const res = await fetch('/api/parcels/deal-analysis', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -473,7 +475,7 @@ export default function FinderPage() {
               <button onClick={()=>setUtilReport(null)} className="btn" style={{ padding:'2px 9px', fontSize:12, flex:'none' }}>✕</button>
             </div>
             {utilReport.loading
-              ? <div className="mono" style={{ fontSize:12, color:'var(--cyan)' }}>Researching water, sewer, electric &amp; gas for this parcel… usually 20–40 seconds.</div>
+              ? <div className="mono" style={{ fontSize:12, color:'var(--cyan)' }}>{utilReport.loadingMsg || 'Working…'}</div>
               : <div className="mono" style={{ fontSize:12, whiteSpace:'pre-wrap', lineHeight:1.65 }}
                   dangerouslySetInnerHTML={{ __html: formatReport(utilReport.text) }} />}
           </div>

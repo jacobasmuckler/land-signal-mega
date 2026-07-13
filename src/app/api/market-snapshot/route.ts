@@ -1,3 +1,5 @@
+import { runOpenAISearch } from '@/lib/openaiRequest';
+
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
@@ -43,22 +45,10 @@ async function aiMarketLine(address: string | undefined, lat: number, lon: numbe
   const model = process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-mini';
   const where = address || `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
   try {
-    const res = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        tools: [{ type: 'web_search' }],
-        input: `Using web search, for the residential market within ~3 miles of ${where} (Charlotte NC region): report the median recent SOLD home price, median sold price per square foot, and typical new-construction home size in sqft. 4 lines max, each "Label: value (source)". Only values a source actually shows — write "not found" otherwise.`,
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return null;
-    if (typeof data?.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
-    const pieces: string[] = [];
-    for (const item of data?.output || []) for (const part of item?.content || []) if (typeof part?.text === 'string') pieces.push(part.text);
-    return pieces.join('\n').trim() || null;
+    return await runOpenAISearch(
+      apiKey, model,
+      `Using web search, for the residential market within ~3 miles of ${where} (Charlotte NC region): report the median recent SOLD home price, median sold price per square foot, and typical new-construction home size in sqft. 4 lines max, each "Label: value (source)". Only values a source actually shows — write "not found" otherwise.`,
+    );
   } catch { return null; }
 }
 

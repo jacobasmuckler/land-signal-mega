@@ -1,3 +1,5 @@
+import { runOpenAISearch } from '@/lib/openaiRequest';
+
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
@@ -72,27 +74,20 @@ export async function POST(request: Request) {
     '**Key swing factors**: sewer, floodplain, zoning risk — the things that move the number most.',
     '**Verify before bidding**: 3-4 specific phone calls.',
     '**Confidence**: high/medium/low and why.',
+    '',
+    'HARD CONSISTENCY RULES — violating any of these makes the report worthless:',
+    '- The **Max offer range** header MUST be derived from your own step-6 number (a tight band around it, e.g. ±20%). Never state a headline range that contradicts your math.',
+    '- Re-check every multiplication before writing it. Do not round $827k to $1M — write the real number.',
+    '- Per-acre figure must equal total ÷ acres.',
+    '- If the step-5 margin (finished lot value minus dev cost) is under ~$15k/lot, the deal is razor-thin: verdict must be PASS or MAYBE with that risk stated first, never a confident number.',
+    '- If steps conflict or data is missing, say so and lower confidence — never paper over it.',
   ].join('\n');
 
   try {
-    const res = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, tools: [{ type: 'web_search' }], input: prompt }),
-      signal: AbortSignal.timeout(55_000),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
-    let report = '';
-    if (typeof data?.output_text === 'string') report = data.output_text.trim();
-    if (!report) {
-      const pieces: string[] = [];
-      for (const item of data?.output || []) for (const part of item?.content || []) if (typeof part?.text === 'string') pieces.push(part.text);
-      report = pieces.join('\n').trim();
-    }
-    return Response.json({ report: report || 'Analysis ran but returned no text — try again.' });
+    const report = await runOpenAISearch(apiKey, model, prompt);
+    return Response.json({ report });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'analysis failed';
-    return Response.json({ error: message }, { status: 502 });
+    return Response.json({ error: `${message} — this was likely a one-off OpenAI hiccup (we already retried automatically); try the button again.` }, { status: 502 });
   }
 }
