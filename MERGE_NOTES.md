@@ -32,6 +32,21 @@ service, consistent statewide — new `geomAreaField`/`geomAreaUnit` source opti
 `normalize()` trusts that field over per-county attributes. Also fixed `polyAcres` to sum
 all rings (multi-part parcels/holes) instead of only the first ring.
 
+## Added 2026-07-14 (later): finder remembers where you left off + Saved rundown UI
+- **Finder persistence**: navigating to Saved/Alerts and back now restores the whole
+  finder session — search inputs, the full result set on the map, any drawn search
+  area, every parcel's analysis setup + pulled reports, active feasibility layers,
+  the selected parcel, and the exact map view (sessionStorage; clears when the tab
+  closes). Restore runs post-mount so SSR hydration is untouched, and saving is
+  gated until restore completes so a fresh page load can't clobber the cache.
+- **Saved page rebuilt**: no more "total acres" tile or distance column. Cards show
+  acreage/address/county + how many reports were pulled; clicking one opens a full
+  rundown modal: owner/zoning, a mini-map with the parcel pin and its comp area
+  (drawn polygon or radius), the comp rules used, and every saved AI report (deal
+  analysis, market stats, full report, utilities, soil) formatted with timestamps.
+  Parcels without a saved workup get a pointer back to the finder. Report renderer
+  shared via new `src/lib/formatReport.ts`.
+
 ## Fixed 2026-07-14: search-area draw did nothing + real drag-to-draw
 Bug: the search-area draw needed a separate "✓ Finish area" click after placing
 corners; if you drew the shape but clicked "Find parcels" without hitting Finish

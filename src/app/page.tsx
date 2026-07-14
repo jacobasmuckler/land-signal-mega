@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { MAP_LAYERS as LAYERS, buildOverlay } from '@/components/mapLayers';
 import { downloadDXF, downloadSHP } from '@/components/parcelExport';
+import { formatReport } from '@/lib/formatReport';
 
 const MILES_TO_M = 1609.34;
 const TILE_THRESHOLD = 2500;
@@ -13,17 +14,9 @@ const DEFAULT_SCOPE = { radiusMiles: 3, polygon: null as [number, number][] | nu
 const BASE_STYLE = { color: '#E8B04B', weight: 1.4, fillColor: '#E8B04B', fillOpacity: .12, opacity: 1 };
 const SEL_STYLE  = { color: '#FFDD99', weight: 2.6, fillColor: '#E8B04B', fillOpacity: .3, opacity: 1 };
 const FADE_STYLE = { color: '#E8B04B', weight: .8, fillColor: '#E8B04B', fillOpacity: .03, opacity: .25 };
-
-// The utility report comes back as light markdown — render **bold** and
-// [label](url) links, escape everything else, and drop tracking tails.
-function formatReport(text: string) {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\?utm_source=openai/g, '')
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer" style="color:var(--cyan);text-decoration:underline">$1</a>')
-    .replace(/\*\*(.+?)\*\*/g, '<b style="color:var(--amber)">$1</b>')
-    .replace(/^#+\s*(.+)$/gm, '<b style="color:var(--amber)">$1</b>');
-}
+// Session-only "come back where you left off" cache for the finder page —
+// survives navigating to Saved/Alerts and back, cleared when the tab closes.
+const SESSION_KEY = 'landSignalFinderState_v1';
 
 declare global { interface Window { L: any; SOURCES: any[]; } }
 
@@ -47,6 +40,14 @@ export default function FinderPage() {
   const [parcelNo, setParcelNo] = useState('');
   const resultsRef = useRef<any[]>([]);
   const [utilReport, setUtilReport] = useState<{ title: string; text: string; loading: boolean; loadingMsg?: string } | null>(null);
+  // The session-restore effect flips this once it's done applying (or found
+  // nothing to apply) — persistState() no-ops until then, so the reactive
+  // effect below can't fire on mount with blank state and clobber a session
+  // the async restore (map load → sessionStorage) hasn't read back yet. This
+  // has to be a plain-default useState above (not a sessionStorage-derived
+  // one): reading sessionStorage during render would make the client's first
+  // render diverge from the server's (no `window` there) and break hydration.
+  const restoredAppliedRef = useRef(false);
 
   // Per-parcel analysis setup: click a parcel → the rest fade → draw the comp
   // area / set the rules for THAT parcel. Keyed by parcel __id (kept for the
@@ -61,9 +62,8 @@ export default function FinderPage() {
   const searchAreaLayer = useRef<any>(null);
   const [drawing, setDrawing] = useState(false);
   const [drawTarget, setDrawTarget] = useState<'comp' | 'search'>('comp');
-  const [drawCount, setDrawCount] = useState(0);
   const compAreaLayer = useRef<any>(null);
-  const drawRef = useRef<{ active: boolean; target: 'comp' | 'search'; pts: [number, number][]; layer: any }>({ active: false, target: 'comp', pts: [], layer: null });
+  const drawRef = useRef<{ active: boolean; dragging: boolean; target: 'comp' | 'search'; pts: [number, number][]; layer: any }>({ active: false, dragging: false, target: 'comp', pts: [], layer: null });
 
   function scopeFor(p: any) { return (p && scopeByParcel.current[p.__id]) || { ...DEFAULT_SCOPE }; }
   function scopeSummary(sc: any) {
@@ -74,6 +74,7 @@ export default function FinderPage() {
     const cur = reportsByParcel.current[p.__id] || {};
     cur[kind] = { text, at: new Date().toISOString() };
     reportsByParcel.current[p.__id] = cur;
+    persistState();
   }
   function updateSelScope(patch: any) {
     if (selIdx == null) return;
@@ -81,6 +82,24 @@ export default function FinderPage() {
     const merged = { ...scopeFor(p), ...patch };
     scopeByParcel.current[p.__id] = merged;
     setSelScope(merged);
+    persistState();
+  }
+  // Cache search inputs/results/drawn areas/per-parcel analysis/map view to
+  // sessionStorage so navigating to Saved/Alerts and back restores it — refs
+  // (scopeByParcel, reportsByParcel) aren't covered by the effect below, so
+  // their mutators call this directly too. Quota-safe: drops the (largest)
+  // results array and retries rather than losing everything.
+  function persistState() {
+    if (typeof window === 'undefined' || !restoredAppliedRef.current) return;
+    const map = mapRef.current;
+    const payload = {
+      city, radius, minAcres, maxAcres, parcelNo,
+      results: resultsRef.current, selIdx, searchArea, activeLayers,
+      scopeByParcel: scopeByParcel.current, reportsByParcel: reportsByParcel.current,
+      view: map ? { center: [map.getCenter().lat, map.getCenter().lng], zoom: map.getZoom() } : null,
+    };
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(payload)); }
+    catch { try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ ...payload, results: [] })); } catch {} }
   }
   // Select a parcel: highlight it, fade the rest, show its stored analysis
   // area on the map, and open its setup panel. null = deselect.
@@ -108,9 +127,19 @@ export default function FinderPage() {
     const L = window.L, map = mapRef.current, d = drawRef.current;
     if (!map || !window.L) return;
     if (d.layer) { map.removeLayer(d.layer); d.layer = null; }
-    if (d.pts.length) {
+    if (d.pts.length >= 2) {
       d.layer = (d.pts.length >= 3 ? L.polygon : L.polyline)(d.pts, DRAW_STYLE[d.target]).addTo(map);
     }
+  }
+  // A finished trace whose on-screen footprint is basically a dot (an
+  // accidental click, not a drag) doesn't count — let the user try again
+  // without kicking them out of draw mode.
+  function traceTooSmall(pts: [number, number][]) {
+    const map = mapRef.current; if (!map || pts.length < 2) return true;
+    const px = pts.map(p => map.latLngToContainerPoint(p));
+    const w = Math.max(...px.map(p => p.x)) - Math.min(...px.map(p => p.x));
+    const h = Math.max(...px.map(p => p.y)) - Math.min(...px.map(p => p.y));
+    return w < 16 && h < 16;
   }
   function startDraw(target: 'comp' | 'search') {
     const map = mapRef.current; if (!map) return;
@@ -119,36 +148,63 @@ export default function FinderPage() {
     // polygon is single-purpose so clearing it is fine.
     if (target === 'comp') { if (compAreaLayer.current) { map.removeLayer(compAreaLayer.current); compAreaLayer.current = null; } }
     else clearSearchArea();
-    drawRef.current = { active: true, target, pts: [], layer: null };
+    drawRef.current = { active: true, dragging: false, target, pts: [], layer: null };
+    // Freehand tracing owns the mouse while drawing — the map itself must not
+    // pan on drag, or every stroke would just scroll the map instead.
+    map.dragging.disable();
     map.doubleClickZoom.disable();
     map.getContainer().style.cursor = 'crosshair';
-    setDrawTarget(target); setDrawing(true); setDrawCount(0);
+    setDrawTarget(target); setDrawing(true);
   }
   function cancelDraw() {
     const map = mapRef.current, L = window.L, d = drawRef.current;
     if (d.layer && map) map.removeLayer(d.layer);
-    drawRef.current = { active: false, target: d.target, pts: [], layer: null };
-    if (map) { map.doubleClickZoom.enable(); map.getContainer().style.cursor = ''; }
+    drawRef.current = { active: false, dragging: false, target: d.target, pts: [], layer: null };
+    if (map) { map.dragging.enable(); map.doubleClickZoom.enable(); map.getContainer().style.cursor = ''; }
     // Restore the selected parcel's stored comp polygon if we were redrawing it.
     if (d.target === 'comp' && selScope.polygon && map && L && !compAreaLayer.current) {
       compAreaLayer.current = L.polygon(selScope.polygon, DRAW_STYLE.comp).addTo(map);
     }
-    setDrawing(false); setDrawCount(0);
+    setDrawing(false);
   }
-  function finishDraw() {
-    const L = window.L, map = mapRef.current, d = drawRef.current;
+  // Mouse-down starts a fresh trace; mouse-move (while down) appends points
+  // that are actually a few pixels apart so the polygon stays smooth without
+  // ballooning; mouse-up commits it — a real "draw a shape" gesture instead
+  // of click-a-corner-per-click.
+  function beginStroke(latlng: { lat: number; lng: number }) {
+    const map = mapRef.current, d = drawRef.current;
     if (!map || !d.active) return;
-    // A double-click fires two click events first — drop consecutive dupes.
-    const pts = d.pts.filter((p, i, arr) => i === 0 || Math.abs(p[0] - arr[i - 1][0]) > 1e-7 || Math.abs(p[1] - arr[i - 1][1]) > 1e-7);
-    if (pts.length < 3) { cancelDraw(); return; }
+    d.dragging = true; d.pts = [[latlng.lat, latlng.lng]];
+    redrawTempArea();
+  }
+  function extendStroke(latlng: { lat: number; lng: number }) {
+    const map = mapRef.current, d = drawRef.current;
+    if (!map || !d.active || !d.dragging) return;
+    const last = d.pts[d.pts.length - 1];
+    const a = map.latLngToContainerPoint(last), b = map.latLngToContainerPoint(latlng);
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 5) return;
+    d.pts.push([latlng.lat, latlng.lng]);
+    redrawTempArea();
+  }
+  function endStroke() {
+    const L = window.L, map = mapRef.current, d = drawRef.current;
+    if (!map || !d.active || !d.dragging) return;
+    d.dragging = false;
+    if (d.pts.length < 3 || traceTooSmall(d.pts)) {
+      // Too small to be a real shape — clear it and stay in draw mode.
+      if (d.layer) { map.removeLayer(d.layer); d.layer = null; }
+      d.pts = [];
+      return;
+    }
+    const pts = d.pts;
     if (d.layer) map.removeLayer(d.layer);
     const target = d.target;
-    drawRef.current = { active: false, target, pts: [], layer: null };
-    map.doubleClickZoom.enable(); map.getContainer().style.cursor = '';
+    drawRef.current = { active: false, dragging: false, target, pts: [], layer: null };
+    map.dragging.enable(); map.doubleClickZoom.enable(); map.getContainer().style.cursor = '';
     const layer = L.polygon(pts, DRAW_STYLE[target]).addTo(map);
     if (target === 'comp') { compAreaLayer.current = layer; updateSelScope({ polygon: pts }); }
     else { searchAreaLayer.current = layer; setSearchArea(pts); }
-    setDrawing(false); setDrawCount(0);
+    setDrawing(false);
   }
   function clearCompArea() {
     const map = mapRef.current;
@@ -163,7 +219,12 @@ export default function FinderPage() {
     setSearchArea(null);
   }
   const drawFns = useRef<any>({});
-  drawFns.current = { redrawTempArea, finishDraw };
+  drawFns.current = { beginStroke, extendStroke, endStroke };
+
+  // Reactive half of the session cache — refs (scope/reports per parcel) are
+  // persisted from their own mutators above instead, since effect deps can't
+  // see into a ref.
+  useEffect(() => { persistState(); }, [results, selIdx, searchArea, activeLayers, city, radius, minAcres, maxAcres, parcelNo]);
 
   // Map-popup buttons fire CustomEvents with the parcel's index — research,
   // exports, and comps all hang off these listeners.
@@ -351,16 +412,14 @@ export default function FinderPage() {
           style:{ color:'#E8B04B', weight:1.4, fillColor:'#E8B04B', fillOpacity:.12 },
           onEachFeature:(f:any,l:any)=> l.bindPopup(popupHtml(f.properties)),
         }).addTo(map);
-        // Comp-area drawing: while active, map clicks add corners (and don't
-        // open parcel popups); double-click closes the polygon.
-        map.on('click', (e:any) => {
-          if (!drawRef.current.active) return;
-          map.closePopup();
-          drawRef.current.pts.push([e.latlng.lat, e.latlng.lng]);
-          drawFns.current.redrawTempArea();
-          setDrawCount(c => c + 1);
-        });
-        map.on('dblclick', () => { if (drawRef.current.active) drawFns.current.finishDraw(); });
+        // Comp/search-area drawing: while active, press-drag-release traces a
+        // real shape on the map (and never opens parcel popups mid-stroke).
+        map.on('mousedown', (e:any) => { if (drawRef.current.active) { map.closePopup(); drawFns.current.beginStroke(e.latlng); } });
+        map.on('mousemove', (e:any) => { if (drawRef.current.active && drawRef.current.dragging) drawFns.current.extendStroke(e.latlng); });
+        map.on('mouseup', () => { if (drawRef.current.active && drawRef.current.dragging) drawFns.current.endStroke(); });
+        // Backstop: if the drag is released past the map's edge, the map's
+        // own mouseup never fires — catch it at the document level instead.
+        document.addEventListener('mouseup', () => { if (drawRef.current.active && drawRef.current.dragging) drawFns.current.endStroke(); });
         // Clicking a parcel opens its popup → that parcel becomes the selected
         // one (others fade, its analysis panel opens). While drawing, popups
         // are suppressed entirely so tracing over parcels never interferes.
@@ -369,7 +428,44 @@ export default function FinderPage() {
           const idx = e.popup?._source?.feature?.properties?.idx;
           if (typeof idx === 'number') selectFns.current.selectParcel(idx);
         });
+        // Persist the map view too, so "where I left off" includes zoom/pan.
+        map.on('moveend', () => persistState());
         mapRef.current = map; parcelLayerRef.current = pl;
+        // Restore a session left off by navigating to Saved/Alerts and back:
+        // search inputs, the result set + map layer, any drawn search area,
+        // every parcel's analysis setup, active feasibility layers, and view.
+        // Done here (post-mount, client-only) rather than during render so the
+        // client's first render still matches the server's for hydration.
+        try {
+          const raw = sessionStorage.getItem(SESSION_KEY);
+          if (raw) {
+            const saved = JSON.parse(raw);
+            if (saved.city) setCity(saved.city);
+            if (saved.radius) setRadius(saved.radius);
+            if (saved.minAcres != null) setMinAcres(saved.minAcres);
+            if (saved.maxAcres != null) setMaxAcres(saved.maxAcres);
+            if (saved.parcelNo) setParcelNo(saved.parcelNo);
+            if (saved.scopeByParcel) scopeByParcel.current = saved.scopeByParcel;
+            if (saved.reportsByParcel) reportsByParcel.current = saved.reportsByParcel;
+            if (Array.isArray(saved.results) && saved.results.length) {
+              resultsRef.current = saved.results;
+              setResults(saved.results);
+              for (const p of saved.results) pl.addData({ type: 'Feature', geometry: p.geojson, properties: p });
+              setStatusMsg(`Restored ${saved.results.length} parcel(s) from your last search.`);
+            }
+            if (Array.isArray(saved.searchArea) && saved.searchArea.length >= 3) {
+              setSearchArea(saved.searchArea);
+              searchAreaLayer.current = L.polygon(saved.searchArea, DRAW_STYLE.search).addTo(map);
+            }
+            if (Array.isArray(saved.activeLayers)) for (const id of saved.activeLayers) toggleLayer(id);
+            if (saved.view) map.setView(saved.view.center, saved.view.zoom);
+            if (saved.selIdx != null && resultsRef.current[saved.selIdx]) selectParcel(saved.selIdx);
+          }
+        } catch {}
+        // From here on, persistState() is allowed to write — the reactive
+        // effect below fires once more on the next render (state changes
+        // above trigger it) and will correctly capture whatever was restored.
+        restoredAppliedRef.current = true;
         setReady(true);
       } catch { setStatusMsg('Map failed to load — check your connection.'); }
     })();
@@ -789,10 +885,9 @@ export default function FinderPage() {
             {drawing && drawTarget==='comp' ? (
               <div style={{ border:'1px dashed #FF7BD5', borderRadius:8, padding:'8px 10px', marginBottom:8 }}>
                 <div className="mono" style={{ fontSize:11.5, color:'#FF7BD5', lineHeight:1.5 }}>
-                  Click the map at each corner of the analysis area — {drawCount} point{drawCount===1?'':'s'} so far. Other parcels won't get in the way. Double-click (or Finish) to close it.
+                  Click and drag on the map to trace the analysis area — release the mouse to finish. Other parcels won't get in the way.
                 </div>
                 <div style={{ display:'flex', gap:6, marginTop:7 }}>
-                  <button className="btn" style={{ padding:'3px 9px', fontSize:11.5 }} onClick={finishDraw} disabled={drawCount<3}>✓ Finish area</button>
                   <button className="btn" style={{ padding:'3px 9px', fontSize:11.5 }} onClick={cancelDraw}>Cancel</button>
                 </div>
               </div>
@@ -835,10 +930,9 @@ export default function FinderPage() {
         ) : drawing && drawTarget==='search' ? (
           <div style={{ border:'1px dashed var(--cyan)', borderRadius:8, padding:'9px 11px', marginTop:9 }}>
             <div className="mono" style={{ fontSize:11.5, color:'var(--cyan)', lineHeight:1.5 }}>
-              Click the map at each corner of your search area — {drawCount} point{drawCount===1?'':'s'} so far. Double-click (or Finish) to close it.
+              Click and drag on the map to trace your search area — release the mouse to finish.
             </div>
             <div style={{ display:'flex', gap:6, marginTop:8 }}>
-              <button className="btn" style={{ padding:'4px 10px', fontSize:12 }} onClick={finishDraw} disabled={drawCount<3}>✓ Finish area</button>
               <button className="btn" style={{ padding:'4px 10px', fontSize:12 }} onClick={cancelDraw}>Cancel</button>
             </div>
           </div>
