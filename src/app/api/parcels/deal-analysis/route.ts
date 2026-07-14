@@ -1,5 +1,6 @@
 import { runOpenAISearch } from '@/lib/openaiRequest';
 import { parseCompScope, scopeCenter, describeArea, compScopeLines } from '@/lib/compScope';
+import { compDataLines } from '@/lib/statsSources';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -65,11 +66,13 @@ export async function POST(request: Request) {
     `Parcel: ${where} — ${acres} acres.${body.zoning ? ` Zoning code on record: ${body.zoning}.` : ' Zoning unknown — research or assume typical for the area and SAY SO.'}${body.owner ? ` Owner of record: ${body.owner}.` : ''}`,
     stats ? `Census tract data for the comp area (authoritative — use these): median home value $${stats.medianHomeValue?.toLocaleString() ?? 'n/a'}, median household income $${stats.medianIncome?.toLocaleString() ?? 'n/a'}, median year built ${stats.medianYearBuilt ?? 'n/a'} (${stats.area}).` : 'No census data available — rely on web search.',
     '',
+    ...compDataLines(body.compData),
+    '',
     ...compScopeLines(scope, where, areaLabel),
     '',
     'Method — show the numbers at every step and label every assumption as an assumption:',
     '1. LOT YIELD: density from zoning (or stated assumption, typically 2-4 lots/acre suburban single-family) × acres, minus 20-25% for roads/stormwater. Note floodplain/terrain risk if likely.',
-    '2. FINISHED HOME VALUE: median NEW-construction sold price and $/sqft inside the comp area defined above (web search; else adjust the census median home value upward for new construction and say so).',
+    '2. FINISHED HOME VALUE: if VERIFIED COUNTY RECORDS are provided above, use their median new-construction sold price and $/sqft directly — that IS the comp data from inside the user\'s area. Otherwise web-search sold comps (else adjust the census median home value upward for new construction and say so).',
     '3. FINISHED LOT VALUE: 20-25% of finished home price.',
     '4. DEVELOPMENT COST per lot: research or assume (typical $40k-70k/lot with public sewer; if sewer is unlikely, switch to septic math — fewer, larger lots — and say so).',
     '5. RAW LAND VALUE to a developer: (finished lot value − dev cost) × lots × ~50-60% discount for time/risk/profit.',

@@ -32,6 +32,27 @@ service, consistent statewide — new `geomAreaField`/`geomAreaUnit` source opti
 `normalize()` trusts that field over per-county attributes. Also fixed `polyAcres` to sum
 all rings (multi-part parcels/holes) instead of only the first ring.
 
+## Added 2026-07-14 (evening): exact per-house comps from county records
+Problem: deal analysis / market stats asked the AI to *web-search* for sold prices
+"inside the drawn area" — the web can't be searched by polygon, so it answered "no
+new-construction sales found in the boundary" and fell back to broad zip-code numbers.
+Fix: new 📈 **Area stats** engine (`src/lib/statsSources.ts`) scans the county GIS for
+EVERY parcel inside the drawn area (or radius) and reads the actual records:
+- Tier 1 (all states): whatever the parcel layer carries — structure flag, assessed
+  building/land/total values, last sale date, land-use description, lot size.
+- Tier 2 (county CAMA registry, Mecklenburg NC wired): joins the county tax tables by
+  parcel number for real **sale price, year built, heated sqft, beds/baths**.
+Output: exact counts (homes, vacant lots, new builds, sales), medians ($, $/sqft,
+sqft, year built, lot size) and a line for every matching home. Bulk/apartment
+transfers are filtered (price ≤ $3M, $40–1500/sqft) so medians aren't skewed.
+"New-construction only" and "3000+ sqft" criteria are applied exactly. Results are
+cached per parcel+area, stashed with saved parcels (shows on /saved), and — the key
+part — passed to 💰 deal analysis and 📊 market stats as **ground-truth comp data**
+the AI must use instead of web guesses (web search only fills gaps like active
+listing prices). Verified live in Steele Creek: 1-mi radius → 1,935 parcels, 1,302
+homes, 152 real sales with addresses/prices; drawn polygon → 533 parcels, 36 sales,
+median $408k/$202 psf. Add more counties in `CAMA_SOURCES` as needed.
+
 ## Added 2026-07-14 (later): finder remembers where you left off + Saved rundown UI
 - **Finder persistence**: navigating to Saved/Alerts and back now restores the whole
   finder session — search inputs, the full result set on the map, any drawn search

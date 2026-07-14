@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MAP_LAYERS as LAYERS, buildOverlay } from '@/components/mapLayers';
 import { downloadDXF, downloadSHP } from '@/components/parcelExport';
 import { formatReport } from '@/lib/formatReport';
+import { sniffAttrs, camaFor, enrichWithCama, computeAreaStats, renderAreaStats, buildCompData, type HomeRec, type CompData } from '@/lib/statsSources';
 
 const MILES_TO_M = 1609.34;
 const TILE_THRESHOLD = 2500;
@@ -256,21 +257,46 @@ export default function FinderPage() {
     function onUtility(e: any) { const p = resultsRef.current[e.detail]; if (p) research(p, 'utilities'); }
     function onFullReport(e: any) { const p = resultsRef.current[e.detail]; if (p) research(p, 'full'); }
 
+    // 📈 Exact area stats — every home in the comp area from county records.
+    async function onAreaStats(e: any) {
+      const p = resultsRef.current[e.detail];
+      if (!p?.center) return;
+      const sc = scopeFor(p);
+      const title = `📈 Area stats — ${p.address || p.parcel || 'parcel'}`;
+      setUtilReport({ title, text: '', loading: true, loadingMsg: `Scanning county records for every home ${sc.polygon ? 'in your drawn area' : `within ${sc.radiusMiles} mi`}… usually 5–20 seconds.` });
+      try {
+        const { text } = await scanFns.current.scanCompArea(p, sc);
+        stashReport(p, 'areastats', text);
+        setUtilReport({ title, text, loading: false });
+      } catch (err: any) {
+        setUtilReport({ title, text: 'Area scan failed: ' + (err?.message || 'network error'), loading: false });
+      }
+    }
+
     // 📊 Market stats — census-tract housing numbers + AI sold-comps pass.
     async function onMarket(e: any) {
       const p = resultsRef.current[e.detail];
       if (!p?.center) return;
       const sc = scopeFor(p);
       const title = `📊 Market — ${p.address || p.parcel || 'area'}`;
-      setUtilReport({ title, text: '', loading: true, loadingMsg: `Pulling census housing data + recent sold prices (${scopeSummary(sc)})… usually 15–30 seconds.` });
+      setUtilReport({ title, text: '', loading: true, loadingMsg: `Scanning county records for homes in your data area, then pulling census + sold prices (${scopeSummary(sc)})… usually 20–40 seconds.` });
+      // Exact per-house records first — they anchor the AI numbers and the
+      // summary is shown at the top of the report.
+      let scan: { compData: CompData; text: string } | null = null;
+      try { scan = await scanFns.current.scanCompArea(p, sc); } catch {}
       try {
         const res = await fetch('/api/market-snapshot', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lat: p.center[0], lon: p.center[1], address: p.address ? `${p.address}, ${p.county || ''} ${p.state || 'NC'}` : undefined, compScope: sc }),
+          body: JSON.stringify({ lat: p.center[0], lon: p.center[1], address: p.address ? `${p.address}, ${p.county || ''} ${p.state || 'NC'}` : undefined, compScope: sc, compData: scan?.compData }),
         });
         const j = await res.json();
         const money = (v: number | null) => v ? '$' + Math.round(v).toLocaleString() : 'n/a';
         const lines: string[] = [];
+        if (scan) {
+          // summary block only (everything before the per-home list)
+          lines.push(scan.text.split('\n**Every')[0].trim());
+          lines.push('', 'Tip: 📈 Area stats lists every individual home behind these numbers.', '');
+        }
         if (j.stats) {
           lines.push('**Census tract housing data** (' + (j.stats.areaName || 'this tract') + ')');
           lines.push(`Median home value: ${money(j.stats.medianHomeValue)}`);
@@ -327,14 +353,18 @@ export default function FinderPage() {
       if (!p?.center || p.acres == null) return;
       const sc = scopeFor(p);
       const title = `💰 Deal analysis — ${p.acres.toFixed(1)} ac · ${p.address || p.parcel || 'parcel'}`;
-      setUtilReport({ title, text: '', loading: true, loadingMsg: `Running the numbers: lot yield, sold comps (${scopeSummary(sc)}), development costs, max offer… usually 30–60 seconds.` });
+      setUtilReport({ title, text: '', loading: true, loadingMsg: `Scanning county records for real sales in your data area, then running the numbers: lot yield, comps (${scopeSummary(sc)}), development costs, max offer… usually 30–60 seconds.` });
+      // Pull the exact county-record comps first — the analysis uses them as
+      // ground truth instead of hoping web search can see inside the area.
+      let scan: { compData: CompData } | null = null;
+      try { scan = await scanFns.current.scanCompArea(p, sc); } catch {}
       try {
         const res = await fetch('/api/parcels/deal-analysis', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             lat: p.center[0], lon: p.center[1], acres: p.acres,
             address: p.address, county: p.county, state: p.state, zoning: p.zoning, owner: p.owner,
-            compScope: sc,
+            compScope: sc, compData: scan?.compData,
           }),
         });
         const j = await res.json();
@@ -376,6 +406,7 @@ export default function FinderPage() {
     window.addEventListener('parcel-utility', onUtility);
     window.addEventListener('parcel-fullreport', onFullReport);
     window.addEventListener('parcel-market', onMarket);
+    window.addEventListener('parcel-areastats', onAreaStats);
     window.addEventListener('parcel-deal', onDeal);
     window.addEventListener('parcel-soil', onSoil);
     window.addEventListener('parcel-export', onExport);
@@ -385,6 +416,7 @@ export default function FinderPage() {
       window.removeEventListener('parcel-utility', onUtility);
       window.removeEventListener('parcel-fullreport', onFullReport);
       window.removeEventListener('parcel-market', onMarket);
+      window.removeEventListener('parcel-areastats', onAreaStats);
       window.removeEventListener('parcel-deal', onDeal);
       window.removeEventListener('parcel-soil', onSoil);
       window.removeEventListener('parcel-export', onExport);
@@ -669,6 +701,69 @@ export default function FinderPage() {
     return out;
   }
 
+  // ── exact area stats: scan county records for every parcel in the comp
+  // area. Web search can't "search inside a polygon", so sold-comps questions
+  // used to come back with broad zip-code numbers — this reads the actual
+  // county tax records (assessed values, sale dates; sale price / year built /
+  // sqft where the county publishes CAMA tables) for each home in the drawn
+  // area and computes exact stats. Results are cached per parcel + scope and
+  // fed to deal analysis / market stats as ground truth. ──
+  const MAX_SCAN = 4000;
+  const areaScanCache = useRef<Record<string, { stats: any; compData: CompData; text: string }>>({});
+  async function scanCompArea(p: any, sc: any): Promise<{ stats: any; compData: CompData; text: string }> {
+    const cacheKey = `${p.__id}|${JSON.stringify({ g: sc.polygon, r: sc.radiusMiles, n: sc.newOnly, c: sc.criteria })}`;
+    if (areaScanCache.current[cacheKey]) return areaScanCache.current[cacheKey];
+    const src = (window.SOURCES || []).find((s: any) => String(p.__id || '').startsWith(sourceKey(s) + '|'));
+    if (!src) throw new Error("couldn't identify this parcel's county source");
+    const center = sc.polygon ? polyCenter(sc.polygon) : (p.center as [number, number]);
+    const mi = sc.polygon ? polyReachMi(sc.polygon) : sc.radiusMiles;
+    const geo = { lat: center[0], lon: center[1], county: p.county, state: p.state };
+    const areaBounds = sc.polygon ? polyBBox(sc.polygon) : undefined;
+    // House-by-house only makes sense at neighborhood scale — check first.
+    try {
+      const cr = await fetchJson(buildUrl(src, geo.lon, geo.lat, mi, 0, null, { countOnly: true, bounds: areaBounds }));
+      if (typeof cr.count === 'number' && cr.count > MAX_SCAN) {
+        throw new Error(`this data area holds ${cr.count.toLocaleString()} parcels — too many for a house-by-house scan. Draw a tighter area around the comp neighborhood you care about.`);
+      }
+    } catch (e: any) { if (/house-by-house/.test(e?.message || '')) throw e; }
+    const { features } = await querySource(src, geo, mi, 0, null, areaBounds);
+    const inArea: HomeRec[] = [];
+    for (const f of features) {
+      const rings = f.geometry?.rings;
+      if (!rings?.length) continue;
+      const [clat, clon] = centroid(rings);
+      if (sc.polygon) { if (!pointInPoly([clat, clon], sc.polygon)) continue; }
+      else if (hav(p.center[0], p.center[1], clat, clon) > sc.radiusMiles) continue;
+      const a = f.attributes || {};
+      let acres: number | null = null;
+      if (src.geomAreaField) { const ga = Number(fieldValue(a, src.geomAreaField)); if (Number.isFinite(ga) && ga > 0) acres = ga / geomAreaPerAcre(src); }
+      if (acres == null) acres = polyAcres(rings);
+      inArea.push({
+        parno: fieldValue(a, src.parcelField) != null ? String(fieldValue(a, src.parcelField)) : null,
+        address: fieldValue(a, src.addressField) ?? null,
+        owner: fieldValue(a, src.ownerField) ?? null,
+        acres,
+        hasStruct: false, useDesc: null, salePrice: null, saleDate: null, yearBuilt: null,
+        sqft: null, beds: null, baths: null, bldgVal: null, landVal: null, totalVal: null,
+        ...sniffAttrs(a),
+      });
+    }
+    if (!inArea.length) throw new Error('no parcels found inside the data area — try drawing it a bit larger.');
+    // County CAMA enrichment (sale price / year built / sqft) where wired.
+    const cama = camaFor(p.state, p.county);
+    let camaLabel: string | null = null;
+    if (cama) { try { await enrichWithCama(cama, inArea); camaLabel = cama.label; } catch {} }
+    const areaDesc = sc.polygon ? 'inside your drawn area' : `within ${sc.radiusMiles} mi of the parcel`;
+    const stats = computeAreaStats(inArea, { newOnly: sc.newOnly, criteria: sc.criteria });
+    const text = renderAreaStats(stats, { areaDesc, camaLabel, newOnly: sc.newOnly, criteria: sc.criteria });
+    const compData = buildCompData(stats, { areaDesc, camaLabel });
+    const out = { stats, compData, text };
+    areaScanCache.current[cacheKey] = out;
+    return out;
+  }
+  const scanFns = useRef<any>({});
+  scanFns.current = { scanCompArea };
+
   function popupHtml(p:any){
     const skip=`https://www.google.com/search?q=`+encodeURIComponent((p.owner||'')+' '+(p.address||''));
     return `<div style="font-family:monospace;font-size:12px;line-height:1.7;min-width:190px">
@@ -694,6 +789,9 @@ export default function FinderPage() {
         <button onclick="window.dispatchEvent(new CustomEvent('parcel-market',{detail:${p.idx}}))"
           style="padding:4px 9px;border-radius:7px;border:1px solid #FFD166;background:transparent;color:#FFD166;cursor:pointer;font-family:inherit;font-size:11.5px">
           📊 Market stats</button>
+        <button onclick="window.dispatchEvent(new CustomEvent('parcel-areastats',{detail:${p.idx}}))"
+          style="padding:4px 9px;border-radius:7px;border:1px solid #7FE8C3;background:transparent;color:#7FE8C3;cursor:pointer;font-family:inherit;font-size:11.5px">
+          📈 Area stats</button>
         <button onclick="window.dispatchEvent(new CustomEvent('parcel-deal',{detail:${p.idx}}))"
           style="padding:4px 9px;border-radius:7px;border:1px solid #6EE7B7;background:transparent;color:#6EE7B7;cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:600">
           💰 Deal analysis</button>
@@ -903,7 +1001,11 @@ export default function FinderPage() {
             <label className="label">Extra comp criteria (optional)</label>
             <input className="input" value={selScope.criteria} onChange={e=>updateSelScope({ criteria:e.target.value })}
               placeholder="e.g. 3000+ sqft, same school district" />
-            <button className="btn" style={{ width:'100%', marginTop:9 }}
+            <button className="btn" style={{ width:'100%', marginTop:9, borderColor:'#7FE8C3', color:'#7FE8C3' }}
+              onClick={()=>window.dispatchEvent(new CustomEvent('parcel-areastats',{ detail:selIdx }))}>
+              📈 Exact area stats — every home in this data area
+            </button>
+            <button className="btn" style={{ width:'100%', marginTop:7 }}
               onClick={(e)=>saveParcel(results[selIdx], e.currentTarget)}>
               💾 Save parcel — keeps this area & any pulled reports
             </button>

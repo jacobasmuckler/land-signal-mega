@@ -11,10 +11,11 @@ export function formatReport(text: string) {
 
 export const REPORT_META: Record<string, { icon: string; label: string }> = {
   deal: { icon: '💰', label: 'Deal analysis' },
+  areastats: { icon: '📈', label: 'Exact area stats (county records)' },
   market: { icon: '📊', label: 'Market stats' },
   full: { icon: '📋', label: 'Zoning · schools · comps' },
   utilities: { icon: '⚡', label: 'Utilities' },
   soil: { icon: '🌱', label: 'Soil / septic' },
 };
 
-export const REPORT_ORDER = ['deal', 'market', 'full', 'utilities', 'soil'];
+export const REPORT_ORDER = ['deal', 'areastats', 'market', 'full', 'utilities', 'soil'];

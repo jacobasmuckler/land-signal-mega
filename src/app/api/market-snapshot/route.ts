@@ -1,5 +1,6 @@
 import { runOpenAISearch } from '@/lib/openaiRequest';
 import { parseCompScope, scopeCenter, describeArea, compScopeLines, type CompScope } from '@/lib/compScope';
+import { compDataLines } from '@/lib/statsSources';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -40,19 +41,23 @@ async function acsStats(state: string, county: string, tract: string, key: strin
   };
 }
 
-async function aiMarketLine(address: string | undefined, lat: number, lon: number, scope: CompScope, areaLabel: string | null) {
+async function aiMarketLine(address: string | undefined, lat: number, lon: number, scope: CompScope, areaLabel: string | null, compData: any) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
   const model = process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-mini';
   const where = address || `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+  const hasRecords = compData?.medianSalePrice != null;
   try {
     return await runOpenAISearch(
       apiKey, model,
       [
         `Using web search, for the residential market around ${where}:`,
+        ...compDataLines(compData),
         ...compScopeLines(scope, where, areaLabel),
-        'Report: the median recent SOLD home price, median sold price per square foot, and typical new-construction home size in sqft — all from inside the comp area above.',
-        '5 lines max, each "Label: value (source)". First line restates the comp area/filters used. Only values a source actually shows — write "not found" otherwise.',
+        hasRecords
+          ? 'The verified county records above already give exact sold prices inside the comp area. Your job is only to ADD what records can\'t show: current ACTIVE listing prices and any new-construction communities actively selling nearby (builder names + base prices if findable).'
+          : 'Report: the median recent SOLD home price, median sold price per square foot, and typical new-construction home size in sqft — all from inside the comp area above.',
+        '5 lines max, each "Label: value (source)". Only values a source actually shows — write "not found" otherwise.',
       ].join('\n'),
     );
   } catch { return null; }
@@ -74,7 +79,7 @@ export async function POST(request: Request) {
   const areaLabel = await describeArea(center.lat, center.lon);
   const [tract, ai] = await Promise.all([
     tractFor(center.lat, center.lon).catch(() => null),
-    aiMarketLine(body.address, lat, lon, scope, areaLabel),
+    aiMarketLine(body.address, lat, lon, scope, areaLabel, body.compData),
   ]);
   const stats = tract && censusKey ? await acsStats(tract.state, tract.county, tract.tract, censusKey).catch(() => null) : null;
 
