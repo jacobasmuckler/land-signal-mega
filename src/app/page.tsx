@@ -7,6 +7,12 @@ import { downloadDXF, downloadSHP } from '@/components/parcelExport';
 const MILES_TO_M = 1609.34;
 const TILE_THRESHOLD = 2500;
 const MAX_SOURCE_RESULTS = 25000;
+// Default analysis setup a parcel gets until you customize it.
+const DEFAULT_SCOPE = { radiusMiles: 3, polygon: null as [number, number][] | null, newOnly: false, criteria: '' };
+// Parcel styles: normal, the clicked parcel, and everything else while one is selected.
+const BASE_STYLE = { color: '#E8B04B', weight: 1.4, fillColor: '#E8B04B', fillOpacity: .12, opacity: 1 };
+const SEL_STYLE  = { color: '#FFDD99', weight: 2.6, fillColor: '#E8B04B', fillOpacity: .3, opacity: 1 };
+const FADE_STYLE = { color: '#E8B04B', weight: .8, fillColor: '#E8B04B', fillOpacity: .03, opacity: .25 };
 
 // The utility report comes back as light markdown — render **bold** and
 // [label](url) links, escape everything else, and drop tracking tails.
@@ -42,13 +48,14 @@ export default function FinderPage() {
   const resultsRef = useRef<any[]>([]);
   const [utilReport, setUtilReport] = useState<{ title: string; text: string; loading: boolean; loadingMsg?: string } | null>(null);
 
-  // Comp scope: which area (radius or drawn polygon) + filters the deal
-  // analysis / market stats / comps must pull data from. Read via ref so the
-  // once-registered popup-event handlers always see the current values.
-  const [compRadius, setCompRadius] = useState(3);
-  const [compNewOnly, setCompNewOnly] = useState(false);
-  const [compCriteria, setCompCriteria] = useState('');
-  const [compArea, setCompArea] = useState<[number, number][] | null>(null);
+  // Per-parcel analysis setup: click a parcel → the rest fade → draw the comp
+  // area / set the rules for THAT parcel. Keyed by parcel __id (kept for the
+  // whole session) and included when the parcel is saved. AI reports pulled
+  // for a parcel are stashed the same way so a save persists them too.
+  const [selIdx, setSelIdx] = useState<number | null>(null);
+  const [selScope, setSelScope] = useState<any>({ ...DEFAULT_SCOPE });
+  const scopeByParcel = useRef<Record<string, any>>({});
+  const reportsByParcel = useRef<Record<string, Record<string, { text: string; at: string }>>>({});
   // The finder can also search inside a drawn polygon instead of city+radius.
   const [searchArea, setSearchArea] = useState<[number, number][] | null>(null);
   const searchAreaLayer = useRef<any>(null);
@@ -57,12 +64,39 @@ export default function FinderPage() {
   const [drawCount, setDrawCount] = useState(0);
   const compAreaLayer = useRef<any>(null);
   const drawRef = useRef<{ active: boolean; target: 'comp' | 'search'; pts: [number, number][]; layer: any }>({ active: false, target: 'comp', pts: [], layer: null });
-  const compScopeRef = useRef<any>(null);
-  compScopeRef.current = { radiusMiles: compRadius, polygon: compArea, newOnly: compNewOnly, criteria: compCriteria };
-  function scopeSummary() {
-    const s = compScopeRef.current;
-    return `${s.polygon ? 'your drawn area' : `within ${s.radiusMiles} mi`}${s.newOnly ? ' · new builds only' : ''}${s.criteria ? ` · ${s.criteria}` : ''}`;
+
+  function scopeFor(p: any) { return (p && scopeByParcel.current[p.__id]) || { ...DEFAULT_SCOPE }; }
+  function scopeSummary(sc: any) {
+    return `${sc.polygon ? 'your drawn area' : `within ${sc.radiusMiles} mi`}${sc.newOnly ? ' · new builds only' : ''}${sc.criteria ? ` · ${sc.criteria}` : ''}`;
   }
+  function stashReport(p: any, kind: string, text: string) {
+    if (!p?.__id || !text) return;
+    const cur = reportsByParcel.current[p.__id] || {};
+    cur[kind] = { text, at: new Date().toISOString() };
+    reportsByParcel.current[p.__id] = cur;
+  }
+  function updateSelScope(patch: any) {
+    if (selIdx == null) return;
+    const p = resultsRef.current[selIdx]; if (!p) return;
+    const merged = { ...scopeFor(p), ...patch };
+    scopeByParcel.current[p.__id] = merged;
+    setSelScope(merged);
+  }
+  // Select a parcel: highlight it, fade the rest, show its stored analysis
+  // area on the map, and open its setup panel. null = deselect.
+  function selectParcel(idx: number | null) {
+    const map = mapRef.current, pl = parcelLayerRef.current, L = window.L;
+    setSelIdx(idx);
+    try { pl?.setStyle((f: any) => idx == null ? BASE_STYLE : (f?.properties?.idx === idx ? SEL_STYLE : FADE_STYLE)); } catch {}
+    if (compAreaLayer.current && map) { map.removeLayer(compAreaLayer.current); compAreaLayer.current = null; }
+    if (idx != null) {
+      const p = resultsRef.current[idx], sc = scopeFor(p);
+      setSelScope(sc);
+      if (sc.polygon && map && L) compAreaLayer.current = L.polygon(sc.polygon, DRAW_STYLE.comp).addTo(map);
+    } else setSelScope({ ...DEFAULT_SCOPE });
+  }
+  const selectFns = useRef<any>({});
+  selectFns.current = { selectParcel };
 
   // One draw engine, two targets: 'comp' (magenta, comps/market data area) and
   // 'search' (cyan, the finder's own search boundary).
@@ -81,17 +115,24 @@ export default function FinderPage() {
   function startDraw(target: 'comp' | 'search') {
     const map = mapRef.current; if (!map) return;
     if (drawRef.current.active) cancelDraw();
-    if (target === 'comp') clearCompArea(); else clearSearchArea();
+    // Hide (don't erase) the stored comp polygon while redrawing; the search
+    // polygon is single-purpose so clearing it is fine.
+    if (target === 'comp') { if (compAreaLayer.current) { map.removeLayer(compAreaLayer.current); compAreaLayer.current = null; } }
+    else clearSearchArea();
     drawRef.current = { active: true, target, pts: [], layer: null };
     map.doubleClickZoom.disable();
     map.getContainer().style.cursor = 'crosshair';
     setDrawTarget(target); setDrawing(true); setDrawCount(0);
   }
   function cancelDraw() {
-    const map = mapRef.current, d = drawRef.current;
+    const map = mapRef.current, L = window.L, d = drawRef.current;
     if (d.layer && map) map.removeLayer(d.layer);
     drawRef.current = { active: false, target: d.target, pts: [], layer: null };
     if (map) { map.doubleClickZoom.enable(); map.getContainer().style.cursor = ''; }
+    // Restore the selected parcel's stored comp polygon if we were redrawing it.
+    if (d.target === 'comp' && selScope.polygon && map && L && !compAreaLayer.current) {
+      compAreaLayer.current = L.polygon(selScope.polygon, DRAW_STYLE.comp).addTo(map);
+    }
     setDrawing(false); setDrawCount(0);
   }
   function finishDraw() {
@@ -105,7 +146,7 @@ export default function FinderPage() {
     drawRef.current = { active: false, target, pts: [], layer: null };
     map.doubleClickZoom.enable(); map.getContainer().style.cursor = '';
     const layer = L.polygon(pts, DRAW_STYLE[target]).addTo(map);
-    if (target === 'comp') { compAreaLayer.current = layer; setCompArea(pts); }
+    if (target === 'comp') { compAreaLayer.current = layer; updateSelScope({ polygon: pts }); }
     else { searchAreaLayer.current = layer; setSearchArea(pts); }
     setDrawing(false); setDrawCount(0);
   }
@@ -113,7 +154,7 @@ export default function FinderPage() {
     const map = mapRef.current;
     if (compAreaLayer.current && map) map.removeLayer(compAreaLayer.current);
     compAreaLayer.current = null;
-    setCompArea(null);
+    updateSelScope({ polygon: null });
   }
   function clearSearchArea() {
     const map = mapRef.current;
@@ -128,9 +169,10 @@ export default function FinderPage() {
   // exports, and comps all hang off these listeners.
   useEffect(() => {
     async function research(p: any, mode: 'utilities' | 'full') {
+      const sc = scopeFor(p);
       const title = `${mode === 'full' ? '📋' : '⚡'} ${p.acres != null ? p.acres.toFixed(1) + ' ac · ' : ''}${p.address || p.parcel || 'parcel'}`;
       setUtilReport({ title, text: '', loading: true, loadingMsg: mode === 'full'
-        ? `Researching zoning, schools & comparable land sales (comps ${scopeSummary()})… usually 20–40 seconds.`
+        ? `Researching zoning, schools & comparable land sales (comps ${scopeSummary(sc)})… usually 20–40 seconds.`
         : 'Researching water, sewer, electric & gas for this parcel… usually 20–40 seconds.' });
       try {
         const res = await fetch('/api/parcels/utility-research', {
@@ -140,10 +182,11 @@ export default function FinderPage() {
             acres: p.acres, address: p.address, owner: p.owner, zoning: p.zoning,
             parcel: p.parcel, county: p.county, state: p.state,
             lat: p.center?.[0], lon: p.center?.[1],
-            ...(mode === 'full' ? { compScope: compScopeRef.current } : {}),
+            ...(mode === 'full' ? { compScope: sc } : {}),
           }),
         });
         const j = await res.json();
+        if (j.report) stashReport(p, mode, j.report);
         setUtilReport({ title, text: j.report || j.error || 'No report returned.', loading: false });
       } catch (err: any) {
         setUtilReport({ title, text: 'Research failed: ' + (err?.message || 'network error'), loading: false });
@@ -156,12 +199,13 @@ export default function FinderPage() {
     async function onMarket(e: any) {
       const p = resultsRef.current[e.detail];
       if (!p?.center) return;
+      const sc = scopeFor(p);
       const title = `📊 Market — ${p.address || p.parcel || 'area'}`;
-      setUtilReport({ title, text: '', loading: true, loadingMsg: `Pulling census housing data + recent sold prices (${scopeSummary()})… usually 15–30 seconds.` });
+      setUtilReport({ title, text: '', loading: true, loadingMsg: `Pulling census housing data + recent sold prices (${scopeSummary(sc)})… usually 15–30 seconds.` });
       try {
         const res = await fetch('/api/market-snapshot', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lat: p.center[0], lon: p.center[1], address: p.address ? `${p.address}, ${p.county || ''} ${p.state || 'NC'}` : undefined, compScope: compScopeRef.current }),
+          body: JSON.stringify({ lat: p.center[0], lon: p.center[1], address: p.address ? `${p.address}, ${p.county || ''} ${p.state || 'NC'}` : undefined, compScope: sc }),
         });
         const j = await res.json();
         const money = (v: number | null) => v ? '$' + Math.round(v).toLocaleString() : 'n/a';
@@ -178,6 +222,7 @@ export default function FinderPage() {
         }
         if (j.ai) { lines.push('', '**Recent sold market (web search)**', j.ai); }
         else { lines.push('', 'Sold $/sqft lookup needs OPENAI_API_KEY (already set if utility research works).'); }
+        if (j.stats || j.ai) stashReport(p, 'market', lines.join('\n'));
         setUtilReport({ title, text: lines.join('\n'), loading: false });
       } catch (err: any) {
         setUtilReport({ title, text: 'Market lookup failed: ' + (err?.message || 'network error'), loading: false });
@@ -219,18 +264,20 @@ export default function FinderPage() {
     async function onDeal(e: any) {
       const p = resultsRef.current[e.detail];
       if (!p?.center || p.acres == null) return;
+      const sc = scopeFor(p);
       const title = `💰 Deal analysis — ${p.acres.toFixed(1)} ac · ${p.address || p.parcel || 'parcel'}`;
-      setUtilReport({ title, text: '', loading: true, loadingMsg: `Running the numbers: lot yield, sold comps (${scopeSummary()}), development costs, max offer… usually 30–60 seconds.` });
+      setUtilReport({ title, text: '', loading: true, loadingMsg: `Running the numbers: lot yield, sold comps (${scopeSummary(sc)}), development costs, max offer… usually 30–60 seconds.` });
       try {
         const res = await fetch('/api/parcels/deal-analysis', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             lat: p.center[0], lon: p.center[1], acres: p.acres,
             address: p.address, county: p.county, state: p.state, zoning: p.zoning, owner: p.owner,
-            compScope: compScopeRef.current,
+            compScope: sc,
           }),
         });
         const j = await res.json();
+        if (j.report) stashReport(p, 'deal', j.report);
         setUtilReport({ title, text: j.report || j.error || 'No analysis returned.', loading: false });
       } catch (err: any) {
         setUtilReport({ title, text: 'Deal analysis failed: ' + (err?.message || 'network error'), loading: false });
@@ -258,6 +305,7 @@ export default function FinderPage() {
           lines.push('', 'How to read it: "Not limited" = septic-friendly. "Somewhat limited" = usually workable with design tweaks. "Very limited" = expect engineered systems or public sewer — fewer, larger lots without it.');
           lines.push('Note: this is the soil at the parcel’s center point; large parcels can span multiple soil types.');
         } else if (j.note) lines.push(j.note);
+        stashReport(p, 'soil', lines.join('\n'));
         setUtilReport({ title, text: lines.join('\n'), loading: false });
       } catch (err: any) {
         setUtilReport({ title, text: 'Soil lookup failed: ' + (err?.message || 'network error'), loading: false });
@@ -313,6 +361,14 @@ export default function FinderPage() {
           setDrawCount(c => c + 1);
         });
         map.on('dblclick', () => { if (drawRef.current.active) drawFns.current.finishDraw(); });
+        // Clicking a parcel opens its popup → that parcel becomes the selected
+        // one (others fade, its analysis panel opens). While drawing, popups
+        // are suppressed entirely so tracing over parcels never interferes.
+        map.on('popupopen', (e: any) => {
+          if (drawRef.current.active) { map.closePopup(); return; }
+          const idx = e.popup?._source?.feature?.properties?.idx;
+          if (typeof idx === 'number') selectFns.current.selectParcel(idx);
+        });
         mapRef.current = map; parcelLayerRef.current = pl;
         setReady(true);
       } catch { setStatusMsg('Map failed to load — check your connection.'); }
@@ -561,6 +617,7 @@ export default function FinderPage() {
     if(!ready)return;
     const L=window.L, map=mapRef.current, pl=parcelLayerRef.current;
     setBusy(true); setResults([]); pl.clearLayers();
+    selectParcel(null);
     if(centerMarker.current){map.removeLayer(centerMarker.current);centerMarker.current=null;}
     if(circle.current){map.removeLayer(circle.current);circle.current=null;}
     try{
@@ -666,11 +723,20 @@ export default function FinderPage() {
     const lyr=buildOverlay(L, map, def);
     lyr.addTo(map); overlayLayers.current[id]=lyr; setActiveLayers(a=>[...a,id]);
   }
-  function focusParcel(p:any){ if(mapRef.current){ mapRef.current.setView(p.center,14); } }
+  function focusParcel(p:any){
+    selectParcel(p.idx);
+    if(mapRef.current){ mapRef.current.setView(p.center,14); }
+    try{ parcelLayerRef.current?.eachLayer((l:any)=>{ if(l.feature?.properties?.idx===p.idx) l.openPopup(); }); }catch{}
+  }
 
   async function saveParcel(p:any, btn?:HTMLButtonElement){
     if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
     try{
+      // The parcel's analysis setup (drawn area + rules) and any reports
+      // already pulled ride along, so a save keeps the whole workup.
+      const sc = scopeFor(p);
+      const hasScope = sc.polygon || sc.newOnly || sc.criteria || sc.radiusMiles !== DEFAULT_SCOPE.radiusMiles;
+      const reports = reportsByParcel.current[p.__id] || null;
       const res = await fetch('/api/parcels/save', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
@@ -678,6 +744,8 @@ export default function FinderPage() {
           county: p.county, url: p.url || p.listingUrl,
           lat: p.center?.[0], lon: p.center?.[1],
           title: p.address || (p.acres ? `${p.acres.toFixed(1)} acres` : 'Saved parcel'),
+          compScope: hasScope ? sc : undefined,
+          reports: reports || undefined,
         }),
       });
       const j = await res.json().catch(()=>({}));
@@ -691,6 +759,61 @@ export default function FinderPage() {
     <div style={{ display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 53px)' }}>
       {/* sidebar */}
       <aside style={{ background:'var(--ink2)', borderRight:'1px solid var(--line)', overflowY:'auto', padding:'18px 18px 40px' }}>
+        {selIdx!=null && results[selIdx] && (
+          <div style={{ border:'1px solid var(--amber)', borderRadius:10, padding:'12px 13px', marginBottom:18, background:'rgba(232,176,75,.06)' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
+              <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)' }}>Selected parcel</div>
+              <button className="btn" style={{ padding:'1px 8px', fontSize:12, flex:'none' }} onClick={()=>selectParcel(null)}>✕</button>
+            </div>
+            <div className="display" style={{ fontWeight:600, fontSize:13.5, marginTop:6 }}>
+              {results[selIdx].acres!=null?results[selIdx].acres.toFixed(1)+' acres':'Acreage n/a'}
+            </div>
+            <div className="mono" style={{ fontSize:11, color:'var(--muted)', marginTop:2 }}>
+              {results[selIdx].address || (results[selIdx].parcel ? `Parcel ${results[selIdx].parcel}` : '—')}
+            </div>
+            <div className="mono" style={{ fontSize:10.5, color:'var(--muted)', margin:'8px 0', lineHeight:1.5 }}>
+              Analysis area & rules for THIS parcel — used by its 💰 deal analysis, 📊 market stats & 📋 comps. Each parcel remembers its own.
+            </div>
+            {selScope.polygon ? (
+              <div style={{ border:'1px solid #FF7BD5', borderRadius:8, padding:'8px 10px', marginBottom:8, background:'rgba(255,123,213,.05)' }}>
+                <div className="mono" style={{ fontSize:11.5, color:'#FF7BD5' }}>Using drawn area ({selScope.polygon.length} corners)</div>
+                <button className="btn" style={{ padding:'3px 9px', fontSize:11.5, marginTop:6 }} onClick={clearCompArea}>✕ Clear — back to radius</button>
+              </div>
+            ) : (
+              <div style={{ marginBottom:8 }}>
+                <label className="label">Pull data within <b style={{ color:'var(--cyan)' }}>{selScope.radiusMiles} mi</b></label>
+                <input type="range" min={0.5} max={15} step={0.5} value={selScope.radiusMiles}
+                  onChange={e=>updateSelScope({ radiusMiles:+e.target.value })} style={{ width:'100%', accentColor:'var(--cyan)' }} />
+              </div>
+            )}
+            {drawing && drawTarget==='comp' ? (
+              <div style={{ border:'1px dashed #FF7BD5', borderRadius:8, padding:'8px 10px', marginBottom:8 }}>
+                <div className="mono" style={{ fontSize:11.5, color:'#FF7BD5', lineHeight:1.5 }}>
+                  Click the map at each corner of the analysis area — {drawCount} point{drawCount===1?'':'s'} so far. Other parcels won't get in the way. Double-click (or Finish) to close it.
+                </div>
+                <div style={{ display:'flex', gap:6, marginTop:7 }}>
+                  <button className="btn" style={{ padding:'3px 9px', fontSize:11.5 }} onClick={finishDraw} disabled={drawCount<3}>✓ Finish area</button>
+                  <button className="btn" style={{ padding:'3px 9px', fontSize:11.5 }} onClick={cancelDraw}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <button className="btn" style={{ width:'100%', marginBottom:8 }} onClick={()=>startDraw('comp')}>
+                ✏️ {selScope.polygon ? 'Redraw the analysis area' : 'Draw the analysis area on the map'}
+              </button>
+            )}
+            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', marginBottom:7 }}>
+              <input type="checkbox" checked={selScope.newOnly} onChange={e=>updateSelScope({ newOnly:e.target.checked })} style={{ accentColor:'var(--cyan)' }} />
+              <span style={{ fontSize:12.5 }}>New-construction comps only</span>
+            </label>
+            <label className="label">Extra comp criteria (optional)</label>
+            <input className="input" value={selScope.criteria} onChange={e=>updateSelScope({ criteria:e.target.value })}
+              placeholder="e.g. 3000+ sqft, same school district" />
+            <button className="btn" style={{ width:'100%', marginTop:9 }}
+              onClick={(e)=>saveParcel(results[selIdx], e.currentTarget)}>
+              💾 Save parcel — keeps this area & any pulled reports
+            </button>
+          </div>
+        )}
         <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)', marginBottom:9 }}>Search area</div>
         <label className="label">City, county, or full address (U.S.)</label>
         <input className="input" style={{ marginBottom:4 }} value={city} onChange={e=>setCity(e.target.value)} placeholder="Gastonia, NC — or 123 Main St, Shelby, NC" />
@@ -732,45 +855,6 @@ export default function FinderPage() {
           <button className="btn" style={{ flex:'none', padding:'8px 12px' }} onClick={searchByParcelNo} disabled={!ready||busy||!parcelNo.trim()}>Find</button>
         </div>
         <div className="mono" style={{ fontSize:10.5, color:'var(--muted)', marginTop:4 }}>Uses the city/county above to pick the right county records.</div>
-
-        <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)', margin:'20px 0 9px' }}>Comp data area</div>
-        <div className="mono" style={{ fontSize:10.5, color:'var(--muted)', marginBottom:8, lineHeight:1.5 }}>
-          Where 💰 Deal analysis, 📊 Market stats & 📋 comps pull their data from.
-        </div>
-        {compArea ? (
-          <div style={{ border:'1px solid #FF7BD5', borderRadius:8, padding:'9px 11px', marginBottom:9, background:'rgba(255,123,213,.05)' }}>
-            <div className="mono" style={{ fontSize:11.5, color:'#FF7BD5' }}>Using your drawn area ({compArea.length} corners)</div>
-            <button className="btn" style={{ padding:'4px 10px', fontSize:12, marginTop:7 }} onClick={clearCompArea}>✕ Clear — back to radius</button>
-          </div>
-        ) : (
-          <div style={{ marginBottom:9 }}>
-            <label className="label">Pull comps within <b style={{ color:'var(--cyan)' }}>{compRadius} mi</b> of the parcel</label>
-            <input type="range" min={0.5} max={15} step={0.5} value={compRadius}
-              onChange={e=>setCompRadius(+e.target.value)} style={{ width:'100%', accentColor:'var(--cyan)' }} />
-          </div>
-        )}
-        {drawing && drawTarget==='comp' ? (
-          <div style={{ border:'1px dashed #FF7BD5', borderRadius:8, padding:'9px 11px', marginBottom:9 }}>
-            <div className="mono" style={{ fontSize:11.5, color:'#FF7BD5', lineHeight:1.5 }}>
-              Click the map at each corner of your comp area — {drawCount} point{drawCount===1?'':'s'} so far. Double-click (or Finish) to close it.
-            </div>
-            <div style={{ display:'flex', gap:6, marginTop:8 }}>
-              <button className="btn" style={{ padding:'4px 10px', fontSize:12 }} onClick={finishDraw} disabled={drawCount<3}>✓ Finish area</button>
-              <button className="btn" style={{ padding:'4px 10px', fontSize:12 }} onClick={cancelDraw}>Cancel</button>
-            </div>
-          </div>
-        ) : (
-          <button className="btn" style={{ width:'100%', marginBottom:9 }} onClick={()=>startDraw('comp')} disabled={!ready}>
-            ✏️ {compArea ? 'Redraw the area' : 'Draw the area on the map instead'}
-          </button>
-        )}
-        <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', marginBottom:8 }}>
-          <input type="checkbox" checked={compNewOnly} onChange={e=>setCompNewOnly(e.target.checked)} style={{ accentColor:'var(--cyan)' }} />
-          <span style={{ fontSize:12.5 }}>New-construction comps only</span>
-        </label>
-        <label className="label">Extra comp criteria (optional)</label>
-        <input className="input" value={compCriteria} onChange={e=>setCompCriteria(e.target.value)}
-          placeholder="e.g. 3000+ sqft, same school district" />
 
         <div className="mono" style={{ fontSize:10, letterSpacing:'.18em', textTransform:'uppercase', color:'var(--amber)', margin:'20px 0 9px' }}>Feasibility layers</div>
         {LAYERS.map(l=>{

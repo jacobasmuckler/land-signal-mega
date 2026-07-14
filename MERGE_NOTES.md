@@ -32,6 +32,17 @@ service, consistent statewide — new `geomAreaField`/`geomAreaUnit` source opti
 `normalize()` trusts that field over per-county attributes. Also fixed `polyAcres` to sum
 all rings (multi-part parcels/holes) instead of only the first ring.
 
+## Reworked 2026-07-13 (final): per-parcel analysis setup
+The comp controls moved OFF the main sidebar. Click a parcel → it highlights, every
+other parcel fades, and a "Selected parcel" panel opens at the top of the sidebar with
+that parcel's own analysis setup: radius slider, draw-the-analysis-area (popups are
+suppressed while drawing so tracing over neighboring parcels never opens them),
+new-construction-only toggle, and free-text criteria. Every parcel remembers its own
+setup for the session (keyed by parcel id) and the AI reports pulled for it are stashed
+the same way. "💾 Save parcel" (panel, popup, or list) persists the drawing + rules +
+all pulled reports into the new `Listing.analysisJson` column
+(migration 20260713150000_add_analysis_json, applied automatically on deploy).
+
 ## Added 2026-07-13: comp data area controls
 Sidebar "Comp data area" panel scopes where 💰 Deal analysis, 📊 Market stats and the
 📋 report's comps pull data from: a radius slider (0.5–15 mi), a draw-on-map polygon

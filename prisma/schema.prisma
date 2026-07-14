@@ -36,6 +36,7 @@ model Listing {
   status                String   @default("New")
   fitScore              Int      @default(1)
   notes                 String?
+  analysisJson          String?
   alertSent             Boolean  @default(false)
   rawEmailId            String?
   rawSnippet            String?
