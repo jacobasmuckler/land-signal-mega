@@ -1,88 +1,47 @@
+import { prisma } from '@/lib/prisma';
+import { relativeRedirect } from '@/lib/redirect';
+import { runUtilityResearch } from '@/lib/utilityResearch';
+
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-// Market snapshot for a clicked parcel: census-tract housing stats (hard data)
-// plus an optional AI web-search pass for sold $/sqft and typical home size.
-// Needs CENSUS_API_KEY (free + instant: api.census.gov/data/key_signup.html).
-
-function acsNum(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : null; // ACS uses big negative sentinels for "no data"
-}
-
-async function tractFor(lat: number, lon: number) {
-  const url = `https://geocoding.geo.census.gov/geocoder/geographies/coordinates?x=${lon}&y=${lat}&benchmark=Public_AR_Current&vintage=Current_Current&format=json`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-  const data = await res.json();
-  const t = data?.result?.geographies?.['Census Tracts']?.[0];
-  return t ? { state: t.STATE, county: t.COUNTY, tract: t.TRACT, name: t.NAME } : null;
-}
-
-async function acsStats(state: string, county: string, tract: string, key: string) {
-  const vars = 'NAME,B25077_001E,B19013_001E,B25035_001E,B25003_001E,B25003_002E,B25010_001E';
-  const url = `https://api.census.gov/data/2023/acs/acs5?get=${vars}&for=tract:${tract}&in=state:${state}+county:${county}&key=${key}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(10_000), redirect: 'follow' });
-  if (!res.ok) return null;
-  const rows = await res.json().catch(() => null);
-  const r = rows?.[1];
-  if (!r) return null;
-  const total = acsNum(r[4]), owner = acsNum(r[5]);
-  return {
-    areaName: r[0],
-    medianHomeValue: acsNum(r[1]),
-    medianHouseholdIncome: acsNum(r[2]),
-    medianYearBuilt: acsNum(r[3]),
-    ownerOccupiedPct: total && owner ? Math.round((owner / total) * 100) : null,
-    avgHouseholdSize: acsNum(r[6]),
-  };
-}
-
-async function aiMarketLine(address: string | undefined, lat: number, lon: number) {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) return null;
-  const model = process.env.OPENAI_MODEL?.trim() || 'gpt-4.1-mini';
-  const where = address || `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+export async function POST(request: Request, context: { params: { id: string } }) {
+  let redirectTo = '/saved';
   try {
-    const res = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        tools: [{ type: 'web_search' }],
-        input: `Using web search, for the residential market within ~3 miles of ${where} (Charlotte NC region): report the median recent SOLD home price, median sold price per square foot, and typical new-construction home size in sqft. 4 lines max, each "Label: value (source)". Only values a source actually shows — write "not found" otherwise.`,
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return null;
-    if (typeof data?.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
-    const pieces: string[] = [];
-    for (const item of data?.output || []) for (const part of item?.content || []) if (typeof part?.text === 'string') pieces.push(part.text);
-    return pieces.join('\n').trim() || null;
-  } catch { return null; }
-}
-
-export async function POST(request: Request) {
-  let body: any = {};
-  try { body = await request.json(); } catch {}
-  const lat = Number(body.lat), lon = Number(body.lon);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-    return Response.json({ error: 'lat/lon required' }, { status: 400 });
+    const form = await request.formData();
+    const rt = String(form.get('redirectTo') || '/saved');
+    redirectTo = rt.startsWith('/') ? rt : '/saved';
+  } catch {
+    redirectTo = '/alerts';
   }
 
-  const censusKey = process.env.CENSUS_API_KEY?.trim();
-  const [tract, ai] = await Promise.all([
-    tractFor(lat, lon).catch(() => null),
-    aiMarketLine(body.address, lat, lon),
-  ]);
-  const stats = tract && censusKey ? await acsStats(tract.state, tract.county, tract.tract, censusKey).catch(() => null) : null;
+  const listing = await prisma.listing.findUnique({ where: { id: context.params.id } });
+  if (!listing) return relativeRedirect(redirectTo);
 
-  return Response.json({
-    tract: tract ? { name: tract.name } : null,
-    stats,
-    statsUnavailableReason: !censusKey
-      ? 'CENSUS_API_KEY not set in Railway — free instant key at api.census.gov/data/key_signup.html'
-      : (!tract ? 'census tract lookup failed' : (!stats ? 'no ACS data for this tract' : null)),
-    ai,
-  });
+  let report: string;
+  try {
+    report = await runUtilityResearch(listing);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Utility research failed';
+    report = `Utility research failed: ${message}`;
+  }
+
+  const stamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+  const utilityBlock = [
+    `\n\n--- Utility Research (${stamp}) ---`,
+    report,
+  ].join('\n');
+
+  try {
+    await prisma.listing.update({
+      where: { id: listing.id },
+      data: {
+        notes: `${listing.notes || ''}${utilityBlock}`.trim(),
+      },
+    });
+  } catch (error) {
+    console.error('Could not save utility research note:', error);
+  }
+
+  return relativeRedirect(redirectTo);
 }

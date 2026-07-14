@@ -32,6 +32,21 @@ service, consistent statewide — new `geomAreaField`/`geomAreaUnit` source opti
 `normalize()` trusts that field over per-county attributes. Also fixed `polyAcres` to sum
 all rings (multi-part parcels/holes) instead of only the first ring.
 
+## Fixed 2026-07-14: search-area draw did nothing + real drag-to-draw
+Bug: the search-area draw needed a separate "✓ Finish area" click after placing
+corners; if you drew the shape but clicked "Find parcels" without hitting Finish
+first, the draw was silently discarded and the search fell through to the (often
+empty) city text box — "Couldn't find that U.S. place." Fix: both the search-area
+and per-parcel comp-area draw now use a real press-drag-release gesture (mousedown
+→ mousemove while held → mouseup), tracing an actual freeform shape instead of
+click-per-corner, and the polygon commits automatically on mouse-up — no separate
+Finish step to forget. A release with almost no on-screen movement (an accidental
+click) is ignored and drawing stays active so you can just try again. Map panning
+is disabled for the duration of the draw so a drag always traces, never scrolls
+the map. Verified live: dragged a real quadrilateral for a search area → committed
+instantly → "Find parcels" returned 2,801 parcels from it; same drag-and-commit
+verified for a per-parcel comp area.
+
 ## Reworked 2026-07-13 (final): per-parcel analysis setup
 The comp controls moved OFF the main sidebar. Click a parcel → it highlights, every
 other parcel fades, and a "Selected parcel" panel opens at the top of the sidebar with
